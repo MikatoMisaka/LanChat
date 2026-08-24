@@ -215,9 +215,10 @@ class _SettingsPageState extends State<SettingsPage> {
           Padding(
             padding: const EdgeInsets.all(16),
             child: Text(
-              '本机 IP: ${app.selfIp.isEmpty ? '未连接网络' : app.selfIp}\n'
+              '本机 IP（多网卡会列出全部，任选可达的一个）:\n'
+              '${app.selfIps.isEmpty ? '未连接网络' : app.selfIps.join('\n')}\n'
               'TCP 端口: ${app.tcpPort}\n'
-              '让对方在「添加设备」中输入以上 IP 和端口即可连接\n'
+              '让对方在「添加设备」中输入以上任一 IP 和端口即可连接\n'
               '纯局域网 P2P，无服务器',
               style: const TextStyle(fontSize: 12, color: Colors.grey),
             ),

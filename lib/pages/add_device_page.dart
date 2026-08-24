@@ -57,7 +57,9 @@ class _AddDevicePageState extends State<AddDevicePage> {
       }
       final (id, name, port) = parsed;
       final uri = Uri.tryParse(result);
-      final ip = uri?.queryParameters['ip'];
+      // 二维码含多个可达 IP（逗号分隔），任取第一个用于手动连接
+      final rawIp = uri?.queryParameters['ip'];
+      final ip = rawIp?.split(',').first.trim();
       final app = AppStateScope.of(context);
       await app.addManualDeviceById(id, name, port, ip: ip);
       if (mounted) Navigator.pop(context);

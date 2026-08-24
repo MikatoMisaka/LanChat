@@ -173,23 +173,33 @@ class _DevicesPageState extends State<DevicesPage> {
   }
 
   void _showMyQr(BuildContext context, AppState app) {
+    final ips = app.selfIps.isNotEmpty ? app.selfIps : <String>[];
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('我的二维码'),
-        content: app.tcpPort == 0 || app.selfIp.isEmpty
+        content: app.tcpPort == 0 || ips.isEmpty
             ? const Text('初始化中，请稍后再试')
             : SizedBox(
                 width: 280,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text('${app.selfName}  ${app.selfIp}:${app.tcpPort}'),
+                    Text(app.selfName,
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 6),
+                    // 多网卡场景列出全部可达 IP，对方任选一个连接
+                    ...ips.map((ip) => Text(
+                          '$ip:${app.tcpPort}',
+                          style: TextStyle(
+                              fontSize: 12, color: Colors.grey.shade700),
+                        )),
                     const SizedBox(height: 12),
                     QrImageView(data: app.buildQr(), size: 220),
                     const SizedBox(height: 8),
                     Text('对方扫码即可添加你',
-                        style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                        style: TextStyle(
+                            color: Colors.grey.shade600, fontSize: 12)),
                   ],
                 ),
               ),

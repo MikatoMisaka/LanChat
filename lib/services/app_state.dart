@@ -813,9 +813,12 @@ class AppState extends ChangeNotifier {
     return (id, name, port);
   }
 
-  /// 生成二维码内容
-  String buildQr() =>
-      'lanchat://$selfId?name=${Uri.encodeComponent(selfName)}&ip=$selfIp&port=$tcpPort';
+  /// 生成二维码内容：编码全部可达 IP（逗号分隔），对方扫码任选可达的一个连接
+  String buildQr() {
+    final ips = _selfIps.isNotEmpty ? _selfIps : (selfIp.isEmpty ? <String>[] : [selfIp]);
+    final ipParam = ips.isEmpty ? '' : '&ip=${Uri.encodeComponent(ips.join(','))}';
+    return 'lanchat://$selfId?name=${Uri.encodeComponent(selfName)}&port=$tcpPort$ipParam';
+  }
 
   @override
   void dispose() {
