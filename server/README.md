@@ -42,6 +42,25 @@ locally by the running client; no external push service is required.
 The chat domain serves Matrix and LanChat client endpoints. The admin domain
 serves the administrator console.
 
+### Docker Hub mirror failure
+
+If Docker reports an HTTP 500 while pulling `dart:3.13.0`, the failure is in
+the configured image mirror, not in Synapse or LanChat. First test an alternate
+registry directly:
+
+```text
+docker pull m.daocloud.io/docker.io/library/dart:3.13.0
+```
+
+If that succeeds, add this to `.env` and run the Compose build again:
+
+```text
+LANCHAT_DART_IMAGE=m.daocloud.io/docker.io/library/dart:3.13.0
+```
+
+Do not disable Docker image signature verification or APT signature checks to
+work around a registry failure.
+
 ## First administrator
 
 The control console uses a separate administrator password from the client

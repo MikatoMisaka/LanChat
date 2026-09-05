@@ -18,6 +18,8 @@ services:
   control:
     build:
       context: ./control
+      args:
+        DART_IMAGE: ${LANCHAT_DART_IMAGE:-dart:3.13.0}
     restart: unless-stopped
     environment:
       LANCHAT_CONFIG_PATH: /data/lanchat-control.json
