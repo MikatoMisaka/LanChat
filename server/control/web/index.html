@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LanChat 管理控制台</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #f4f7f2; color: #193027; }
+    main { max-width: 900px; margin: 0 auto; padding: 32px 18px 60px; }
+    h1 { margin: 0 0 24px; font-size: 28px; }
+    section { background: #fff; border: 1px solid #dce7df; border-radius: 16px; padding: 20px; margin: 16px 0; box-shadow: 0 5px 18px #163b2b0d; }
+    label { display: block; font-size: 13px; font-weight: 700; margin: 12px 0 5px; }
+    input { width: 100%; box-sizing: border-box; border: 1px solid #b8cbbd; border-radius: 10px; padding: 10px 12px; font: inherit; }
+    button { border: 0; border-radius: 10px; padding: 10px 14px; background: #226b4b; color: white; font: inherit; cursor: pointer; margin-top: 14px; }
+    button.secondary { background: #e2eee6; color: #193027; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 12px; }
+    .stat { background: #f1f7f2; border-radius: 12px; padding: 14px; }
+    .stat strong { display: block; font-size: 22px; margin-top: 4px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f7f2; border-radius: 10px; padding: 12px; }
+    #app { display: none; }
+    #status { min-height: 1.3em; color: #8c3e2d; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>LanChat 管理控制台</h1>
+  <p id="status"></p>
+  <section id="login">
+    <h2>管理员登录</h2>
+    <form id="login-form">
+      <label for="password">管理员密码</label>
+      <input id="password" type="password" autocomplete="current-password" required>
+      <button>登录</button>
+    </form>
+  </section>
+  <div id="app">
+    <section>
+      <h2>服务器状态</h2>
+      <div class="grid">
+        <div class="stat">服务器<strong id="server-name">-</strong></div>
+        <div class="stat">今日图片流量<strong id="image-bytes">-</strong></div>
+        <div class="stat">登记用户设备<strong id="device-count">-</strong></div>
+      </div>
+    </section>
+    <section>
+      <h2>服务器限制</h2>
+      <form id="config-form">
+        <label for="encryption-mode">消息加密模式</label>
+        <select id="encryption-mode">
+          <option value="e2ee">端到端加密（推荐）</option>
+          <option value="readable">服务器可读</option>
+        </select>
+        <label for="max-image">单张图片上限（字节）</label>
+        <input id="max-image" type="number" min="1" required>
+        <label for="retention">消息保留天数</label>
+        <input id="retention" type="number" min="1" required>
+        <label for="user-quota">单用户每日图片流量（字节）</label>
+        <input id="user-quota" type="number" min="1" required>
+        <label for="global-quota">全局每日图片流量（字节）</label>
+        <input id="global-quota" type="number" min="1" required>
+        <button>保存限制</button>
+      </form>
+    </section>
+    <section>
+      <h2>用户</h2>
+      <form id="user-form" class="grid">
+        <div><label for="username">用户名</label><input id="username" required></div>
+        <div><label for="display-name">昵称</label><input id="display-name"></div>
+        <div><label for="user-password">初始密码</label><input id="user-password" type="password" required></div>
+        <button>创建用户</button>
+      </form>
+      <pre id="users">尚未加载</pre>
+      <form id="reset-user-form">
+        <label for="reset-user-id">重置密码的 Matrix 用户 ID</label>
+        <input id="reset-user-id" placeholder="@alice:example.com" required>
+        <label for="reset-user-password">新用户密码</label>
+        <input id="reset-user-password" type="password" minlength="8" required>
+        <button>重置用户密码</button>
+      </form>
+      <form id="revoke-device-form">
+        <label for="revoke-user-id">撤销设备的 Matrix 用户 ID</label>
+        <input id="revoke-user-id" placeholder="@alice:example.com" required>
+        <label for="revoke-device-id">设备 ID</label>
+        <input id="revoke-device-id" required>
+        <button>撤销设备</button>
+      </form>
+    </section>
+    <section>
+      <h2>管理员凭据</h2>
+      <form id="admin-password-form">
+        <label for="admin-password">新管理员密码</label>
+        <input id="admin-password" type="password" minlength="8" required>
+        <button>修改管理员密码</button>
+      </form>
+      <form id="access-code-form">
+        <label for="access-code">新服务器接入码</label>
+        <input id="access-code" type="password" minlength="8" required>
+        <button>轮换接入码</button>
+      </form>
+    </section>
+    <section>
+      <button id="logout" class="secondary">退出登录</button>
+    </section>
+  </div>
+</main>
+<script>
+  let adminToken = '';
+  const $ = (id) => document.getElementById(id);
+  const setStatus = (text, error = true) => { $('status').textContent = text; $('status').style.color = error ? '#8c3e2d' : '#226b4b'; };
+  async function api(path, options = {}) {
+    options.headers = { ...(options.headers || {}), 'content-type': 'application/json' };
+    if (adminToken) options.headers.authorization = `Bearer ${adminToken}`;
+    const response = await fetch(path, options);
+    const text = await response.text();
+    const body = text ? JSON.parse(text) : {};
+    if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+    return body;
+  }
+  async function refresh() {
+    const config = await api('/api/v1/admin/config');
+    const stats = await api('/api/v1/admin/stats');
+    const users = await api('/api/v1/admin/users');
+    $('server-name').textContent = config.serverName;
+    $('encryption-mode').value = config.encryptionMode;
+    $('image-bytes').textContent = String(stats.imageBytes || 0);
+    $('device-count').textContent = String((users.users || []).length);
+    $('max-image').value = config.maxImageBytes;
+    $('retention').value = config.retentionDays;
+    $('user-quota').value = config.perUserDailyImageBytes;
+    $('global-quota').value = config.globalDailyImageBytes;
+    $('users').textContent = JSON.stringify(users.users || [], null, 2);
+  }
+  $('login-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      const result = await api('/api/v1/admin/login', { method: 'POST', body: JSON.stringify({ password: $('password').value }) });
+      adminToken = result.token;
+      $('login').style.display = 'none';
+      $('app').style.display = 'block';
+      await refresh();
+      setStatus('登录成功', false);
+    } catch (error) { setStatus(error.message); }
+  });
+  $('config-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      await api('/api/v1/admin/config', { method: 'PUT', body: JSON.stringify({
+        encryptionMode: $('encryption-mode').value,
+        maxImageBytes: Number($('max-image').value), retentionDays: Number($('retention').value),
+        perUserDailyImageBytes: Number($('user-quota').value), globalDailyImageBytes: Number($('global-quota').value)
+      }) });
+      setStatus('限制已保存', false);
+    } catch (error) { setStatus(error.message); }
+  });
+  $('user-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      await api('/api/v1/admin/users', { method: 'POST', body: JSON.stringify({
+        username: $('username').value, displayName: $('display-name').value, password: $('user-password').value
+      }) });
+      event.target.reset(); await refresh(); setStatus('用户已创建', false);
+    } catch (error) { setStatus(error.message); }
+  });
+  $('reset-user-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      const userId = encodeURIComponent($('reset-user-id').value);
+      await api(`/api/v1/admin/users/${userId}/password`, { method: 'POST', body: JSON.stringify({ password: $('reset-user-password').value }) });
+      event.target.reset(); setStatus('用户密码已重置', false);
+    } catch (error) { setStatus(error.message); }
+  });
+  $('revoke-device-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      const userId = encodeURIComponent($('revoke-user-id').value);
+      const deviceId = encodeURIComponent($('revoke-device-id').value);
+      await api(`/api/v1/admin/users/${userId}/devices/${deviceId}`, { method: 'DELETE' });
+      event.target.reset(); setStatus('设备已撤销', false);
+    } catch (error) { setStatus(error.message); }
+  });
+  $('admin-password-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      await api('/api/v1/admin/password', { method: 'POST', body: JSON.stringify({ password: $('admin-password').value }) });
+      event.target.reset(); setStatus('管理员密码已修改', false);
+    } catch (error) { setStatus(error.message); }
+  });
+  $('access-code-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    try {
+      await api('/api/v1/admin/access-code/rotate', { method: 'POST', body: JSON.stringify({ accessCode: $('access-code').value }) });
+      event.target.reset(); setStatus('服务器接入码已轮换', false);
+    } catch (error) { setStatus(error.message); }
+  });
+  $('logout').addEventListener('click', () => { adminToken = ''; location.reload(); });
+</script>
+</body>
+</html>

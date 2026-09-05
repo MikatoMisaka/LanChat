@@ -1,0 +1,27 @@
+# Generate the complete file with the official image before first startup:
+#
+#   docker compose run --rm synapse generate
+#
+# The generated file is stored in ./synapse/data and is intentionally not
+# committed. Review it and apply these production settings there:
+#
+# server_name: the same value as SYNAPSE_SERVER_NAME
+# public_baseurl: https://chat.example.com/
+# enable_registration: false
+# user_directory:
+#   enabled: true
+#   search_all_users: true
+# max_upload_size: 20M
+# retention:
+#   enabled: true
+#   default_policy:
+#     min_lifetime: 1d
+#     max_lifetime: 30d
+# media_retention:
+#   local_media_lifetime: 30d
+#   remote_media_lifetime: 30d
+#
+# Synapse message-event retention needs a separately reviewed purge policy or
+# retention job; do not assume media_retention removes chat history.
+#
+# Keep the generated signing keys and database inside ./synapse/data only.

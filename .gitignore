@@ -59,3 +59,14 @@ app.*.map.json
 # Local Android release signing material
 /android/key.properties
 /android/*.jks
+
+# Project-local Rust toolchain installed for flutter_vodozemac builds
+/.tools/
+/.rustup/
+/.cargo/
+
+# Self-hosted server runtime data and secrets
+/server/.env
+/server/Caddyfile
+/server/data/
+/server/synapse/data/

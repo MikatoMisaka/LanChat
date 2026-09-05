@@ -8,9 +8,11 @@ list(APPEND FLUTTER_PLUGIN_LIST
   gal
   share_plus
   url_launcher_windows
+  win_toast
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST
+  flutter_vodozemac
 )
 
 set(PLUGIN_BUNDLED_LIBRARIES)

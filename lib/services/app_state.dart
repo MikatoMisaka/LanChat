@@ -14,6 +14,7 @@ import 'db_service.dart';
 import 'discovery_service.dart';
 import 'file_digest.dart';
 import 'identity_service.dart';
+import 'notification_service.dart';
 import 'secure_protocol.dart';
 import 'secure_transport_service.dart';
 
@@ -31,6 +32,7 @@ class AppState extends ChangeNotifier {
 
   final DbService db = DbService();
   final IdentityService identityService;
+  final LocalNotificationService? notificationService;
   DiscoveryService? _discovery;
   DiscoveryService? get discovery => _discovery;
   late final SecureTransportService transport;
@@ -95,6 +97,7 @@ class AppState extends ChangeNotifier {
 
   AppState({
     IdentityService? identityService,
+    this.notificationService,
     MethodChannel? multicastChannel,
     Future<List<String>> Function()? selfIpsLookup,
   }) : identityService = identityService ?? IdentityService(),
@@ -469,6 +472,10 @@ class AppState extends ChangeNotifier {
     _latestMsgs[dev.id] = m;
     _msgController.add(dev.id);
     _notifyIfActive();
+    final notifications = notificationService;
+    if (notifications != null) {
+      unawaited(notifications.showMessage(dev.name));
+    }
   }
 
   Future<bool> _onPairingRequest(PairingRequest request) {

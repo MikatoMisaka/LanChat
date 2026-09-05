@@ -1,14 +1,21 @@
 package com.example.lanchat
 
+import android.Manifest
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -27,14 +34,75 @@ import javax.crypto.spec.GCMParameterSpec
 class MainActivity : FlutterActivity() {
     private val channelName = "lanchat/multicast"
     private val identityStorageChannelName = "lanchat/identity_storage"
+    private val localNotificationChannelName = "lanchat/local_notifications"
+    private val localNotificationChannelId = "lanchat_messages"
     private val identityKeyAlias = "lanchat.identity.storage"
     private val identityPreferencesName = "lanchat.identity.storage"
     private val identityStorageExecutor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val identityStorageRequests = mutableMapOf<Long, MethodChannel.Result>()
     private var nextIdentityStorageRequestId = 0L
+    private var nextLocalNotificationId = 1
     private var identityStorageClosing = false
     private var lock: WifiManager.MulticastLock? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        ensureLocalNotificationChannel()
+    }
+
+    private fun ensureLocalNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    localNotificationChannelId,
+                    "LanChat 消息",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "LanChat 新消息提醒"
+                }
+            )
+        }
+    }
+
+    private fun requestLocalNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1001)
+        }
+    }
+
+    private fun showLocalNotification(title: String, body: String) {
+        ensureLocalNotificationChannel()
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        }
+        val pendingFlags = PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_IMMUTABLE
+            } else {
+                0
+            }
+        val pendingIntent = PendingIntent.getActivity(this, 0, intent, pendingFlags)
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Notification.Builder(this, localNotificationChannelId)
+        } else {
+            Notification.Builder(this)
+        }
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setPriority(Notification.PRIORITY_HIGH)
+        getSystemService(NotificationManager::class.java).notify(
+            nextLocalNotificationId++,
+            builder.build()
+        )
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         // 部分设备/安装方式下 MlKitInitProvider 未在进程启动时完成初始化，
@@ -47,6 +115,31 @@ class MainActivity : FlutterActivity() {
         } catch (_: Exception) {
         }
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, localNotificationChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "initialize" -> {
+                        ensureLocalNotificationChannel()
+                        requestLocalNotificationPermission()
+                        result.success(true)
+                    }
+                    "show" -> {
+                        val title = call.argument<String>("title")
+                        val body = call.argument<String>("body")
+                        if (title.isNullOrBlank() || body.isNullOrBlank()) {
+                            result.error(
+                                "NOTIFICATION",
+                                "Notification title and body are required.",
+                                null
+                            )
+                        } else {
+                            showLocalNotification(title, body)
+                            result.success(true)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
             .setMethodCallHandler { call, result ->
                 when (call.method) {

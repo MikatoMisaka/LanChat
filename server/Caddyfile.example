@@ -1,0 +1,13 @@
+{$CHAT_DOMAIN} {
+    @control path /_lanchat/* /api/* /healthz
+    handle @control {
+        reverse_proxy control:8080
+    }
+    handle {
+        reverse_proxy synapse:8008
+    }
+}
+
+{$ADMIN_DOMAIN} {
+    reverse_proxy control:8080
+}

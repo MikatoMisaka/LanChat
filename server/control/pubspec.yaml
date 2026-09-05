@@ -1,0 +1,17 @@
+name: lanchat_control
+description: LanChat self-hosted control and access service.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  cryptography: ^2.9.0
+  http: ^1.6.0
+  shelf: ^1.4.2
+  shelf_router: ^1.1.4
+  uuid: ^4.5.1
+
+dev_dependencies:
+  test: ^1.26.0

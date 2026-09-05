@@ -3,7 +3,7 @@
 ## Repository
 
 - `LICENSE` identifies LanChat as GPL-3.0-or-later.
-- `README.md` describes the current client and the planned server edition.
+- `README.md` describes the current client and the self-hosted server edition.
 - `THIRD_PARTY_NOTICES.md` records direct software and external-service notices.
 - `pubspec.lock` remains committed so dependency versions are reproducible.
 
@@ -18,10 +18,10 @@
 
 ## Server Edition
 
-The server edition will publish its Dockerfile, Compose configuration, example
-environment file, reverse-proxy example, database migrations, and deployment
-documentation. Real administrator passwords, access codes, FCM credentials, and
-server data must remain outside the repository.
+The server edition publishes its Dockerfiles, Compose configuration, example
+environment files, reverse-proxy example, control service, and deployment
+documentation. Real administrator passwords, access codes, and server data
+must remain outside the repository.
 
 If a mature server such as Matrix or Prosody is used, prefer its official image
 or protocol integration instead of copying its source into this repository.

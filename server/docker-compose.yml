@@ -1,0 +1,51 @@
+services:
+  synapse:
+    image: ${SYNAPSE_IMAGE:-matrixdotorg/synapse:latest}
+    restart: unless-stopped
+    environment:
+      SYNAPSE_SERVER_NAME: ${SYNAPSE_SERVER_NAME}
+      SYNAPSE_REPORT_STATS: "no"
+    command: ["run", "-c", "/data/homeserver.yaml"]
+    volumes:
+      - ./synapse/data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8008/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  control:
+    build:
+      context: ./control
+    restart: unless-stopped
+    environment:
+      LANCHAT_CONFIG_PATH: /data/lanchat-control.json
+      LANCHAT_SERVER_NAME: ${LANCHAT_SERVER_NAME:-LanChat Server}
+      LANCHAT_BOOTSTRAP_ADMIN_PASSWORD: ${LANCHAT_BOOTSTRAP_ADMIN_PASSWORD}
+      LANCHAT_BOOTSTRAP_ACCESS_CODE: ${LANCHAT_BOOTSTRAP_ACCESS_CODE}
+      SYNAPSE_INTERNAL_URL: http://synapse:8008
+      SYNAPSE_ADMIN_TOKEN: ${SYNAPSE_ADMIN_TOKEN:-}
+      LANCHAT_WEB_ROOT: /app/web
+    volumes:
+      - ./data/control:/data
+    depends_on:
+      synapse:
+        condition: service_healthy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      CHAT_DOMAIN: ${CHAT_DOMAIN}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy:/data
+      - ./data/caddy-config:/config
+    depends_on:
+      - synapse
+      - control

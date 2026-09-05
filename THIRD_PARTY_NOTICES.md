@@ -30,6 +30,8 @@ prepared; consult each linked package before redistributing a modified build.
 | crypto | BSD-3-Clause | https://pub.dev/packages/crypto |
 | desktop_drop | Apache-2.0 | https://pub.dev/packages/desktop_drop |
 | gal | BSD-3-Clause | https://pub.dev/packages/gal |
+| matrix | AGPL-3.0 | https://pub.dev/packages/matrix |
+| win_toast | Apache-2.0 | https://pub.dev/packages/win_toast |
 
 ## Native and External Services
 
@@ -39,6 +41,9 @@ prepared; consult each linked package before redistributing a modified build.
 - PigHub is an external online sticker service. Its API, metadata, and image
   content are not part of the LanChat copyright grant. Users and distributors
   must follow PigHub's current terms.
+- The Matrix Dart SDK is licensed under AGPL-3.0-or-later. Its transitive
+  components, including vodozemac, retain their own upstream licenses.
+- WinToast and its Flutter wrapper retain their upstream Apache-2.0 licenses.
 - Android, Windows, SQLite, and other operating-system components are system
   libraries and retain their respective licenses.
 
