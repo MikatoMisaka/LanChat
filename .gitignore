@@ -50,3 +50,12 @@ app.*.map.json
 
 # 本地打包产物（APK / Windows zip），不入库
 /apk/
+/release/
+
+# Local agent notes and CodeGraph runtime state
+/.learnings/
+/.codegraph/daemon.pid
+
+# Local Android release signing material
+/android/key.properties
+/android/*.jks

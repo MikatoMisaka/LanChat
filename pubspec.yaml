@@ -46,6 +46,10 @@ dependencies:
   share_plus: ^10.0.0
   path: ^1.9.0
   intl: ^0.19.0
+  cryptography: ^2.9.0
+  crypto: ^3.0.6
+  desktop_drop: ^0.8.4
+  gal: ^2.3.3
 
 dev_dependencies:
   flutter_test:

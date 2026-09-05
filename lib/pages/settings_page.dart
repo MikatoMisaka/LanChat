@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../services/app_state.dart';
+import '../widgets/chat_theme.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -76,10 +77,10 @@ class _SettingsPageState extends State<SettingsPage> {
         ..writeAsStringSync(json);
       final f2 = File('${tmp.path}/lanchat_export_$stamp.txt')
         ..writeAsStringSync(text);
-      await Share.shareXFiles(
-        [XFile(f1.path), XFile(f2.path)],
-        text: 'LanChat 聊天记录',
-      );
+      await Share.shareXFiles([
+        XFile(f1.path),
+        XFile(f2.path),
+      ], text: 'LanChat 聊天记录');
     } catch (e) {
       _toast('导出失败: $e');
     }
@@ -93,17 +94,19 @@ class _SettingsPageState extends State<SettingsPage> {
         content: const Text('此操作不可恢复'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('清空')),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('清空'),
+          ),
         ],
       ),
     );
     if (ok != true) return;
     if (!mounted) return;
-    await AppStateScope.of(context).db.clearAllMessages();
+    await AppStateScope.of(context).clearAllMessages();
     _toast('已清空');
   }
 
@@ -112,24 +115,8 @@ class _SettingsPageState extends State<SettingsPage> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-          SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
-  }
-
-  Future<void> _pickFilesDir() async {
-    final app = AppStateScope.of(context);
-    // Windows/桌面：file_picker 的目录选择器；移动端部分机型不可用，失败则提示
-    final result = await FilePicker.platform.getDirectoryPath();
-    if (result == null) return;
-    await app.setFilesDir(result);
-    if (!mounted) return;
-    _toast('已设置：$result');
-  }
-
-  Future<void> _resetFilesDir() async {
-    final app = AppStateScope.of(context);
-    await app.setFilesDir(null);
-    if (!mounted) return;
-    _toast('已恢复默认保存位置');
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
+      );
   }
 
   @override
@@ -137,93 +124,127 @@ class _SettingsPageState extends State<SettingsPage> {
     final app = AppStateScope.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
-      body: ListView(
-        children: [
-          const SizedBox(height: 16),
-          Center(
-            child: GestureDetector(
-              onTap: _pickAvatar,
-              child: CircleAvatar(
-                radius: 40,
-                backgroundImage: app.selfAvatar != null
-                    ? FileImage(File(app.selfAvatar!))
-                    : null,
-                child: app.selfAvatar == null
-                    ? const Icon(Icons.person, size: 40)
-                    : null,
-              ),
+      body: LayoutBuilder(
+        builder: (context, constraints) => Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: constraints.maxWidth > 720 ? 720 : double.infinity,
             ),
-          ),
-          const SizedBox(height: 8),
-          Center(
-            child: Text('点击更换头像',
-                style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
-          ),
-          const SizedBox(height: 24),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 20, 16, 32),
               children: [
-                const Text('昵称'),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: TextField(
-                    controller: _nameCtrl,
-                    decoration: const InputDecoration(isDense: true),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(18),
+                    child: Row(
+                      children: [
+                        GestureDetector(
+                          onTap: _pickAvatar,
+                          child: CircleAvatar(
+                            radius: 38,
+                            backgroundColor: LanChatTheme.mint,
+                            backgroundImage: app.selfAvatar != null
+                                ? FileImage(File(app.selfAvatar!))
+                                : null,
+                            child: app.selfAvatar == null
+                                ? const Icon(Icons.person, size: 38)
+                                : null,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                '个人资料',
+                                style: TextStyle(fontSize: 12),
+                              ),
+                              const SizedBox(height: 8),
+                              TextField(
+                                controller: _nameCtrl,
+                                decoration: const InputDecoration(
+                                  hintText: '输入昵称',
+                                  isDense: true,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          tooltip: '保存昵称',
+                          onPressed: () async {
+                            await app.setSelfName(_nameCtrl.text);
+                            _toast('昵称已保存');
+                          },
+                          icon: const Icon(Icons.check),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                TextButton(
-                  onPressed: () async {
-                    await app.setSelfName(_nameCtrl.text.trim());
-                    _toast('已保存');
-                  },
-                  child: const Text('保存'),
+                const SizedBox(height: 18),
+                const Text(
+                  '数据与文件',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                Card(
+                  child: Column(
+                    children: [
+                      const ListTile(
+                        leading: Icon(Icons.folder_outlined),
+                        title: Text('应用专用文件目录'),
+                        subtitle: Text(
+                          '接收文件由 LanChat 管理，避免路径穿越和误覆盖。'
+                          '需要取出文件时，在聊天中使用“另存为”。',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.file_download_outlined),
+                        title: const Text('导出聊天记录'),
+                        subtitle: const Text('导出 JSON 和文本，内容为明文'),
+                        onTap: _export,
+                      ),
+                      ListTile(
+                        leading: const Icon(
+                          Icons.delete_forever_outlined,
+                          color: Colors.red,
+                        ),
+                        title: const Text('清空聊天记录'),
+                        subtitle: const Text('同时删除已接收文件和未完成传输'),
+                        onTap: _clear,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const Text(
+                  '局域网连接',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(
+                      '本机地址（多网卡可任选一个）:\n'
+                      '${app.selfIps.isEmpty ? '未连接网络' : app.selfIps.join('\n')}\n'
+                      'TCP 端口: ${app.tcpPort}\n\n'
+                      '对方输入 IP 和端口后发起配对。配对并核对六位数字后，'
+                      '聊天与文件才会加密传输。\n\n'
+                      '纯局域网 P2P，无服务器',
+                      style: TextStyle(fontSize: 12, height: 1.5),
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
-          const Divider(),
-          ListTile(
-            leading: const Icon(Icons.folder),
-            title: const Text('接收文件保存位置'),
-            subtitle: Text(
-              app.filesBase.isEmpty ? '默认：应用文档目录' : app.filesBase,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12),
-            ),
-            onTap: _pickFilesDir,
-            trailing: app.filesBase.isEmpty
-                ? null
-                : TextButton(
-                    onPressed: _resetFilesDir,
-                    child: const Text('默认'),
-                  ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.file_download),
-            title: const Text('导出聊天记录'),
-            subtitle: const Text('导出 JSON 和文本，通过分享菜单保存'),
-            onTap: _export,
-          ),
-          ListTile(
-            leading: const Icon(Icons.delete_forever, color: Colors.red),
-            title: const Text('清空聊天记录'),
-            onTap: _clear,
-          ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(
-              '本机 IP（多网卡会列出全部，任选可达的一个）:\n'
-              '${app.selfIps.isEmpty ? '未连接网络' : app.selfIps.join('\n')}\n'
-              'TCP 端口: ${app.tcpPort}\n'
-              '让对方在「添加设备」中输入以上任一 IP 和端口即可连接\n'
-              '纯局域网 P2P，无服务器',
-              style: const TextStyle(fontSize: 12, color: Colors.grey),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

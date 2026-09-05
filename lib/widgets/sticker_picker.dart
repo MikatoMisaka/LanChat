@@ -1,25 +1,22 @@
+import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../services/sticker_service.dart';
 
-/// 表情/图片选择面板：
-/// - 表情 tab：常用 emoji，点一下作为文本发送
-/// - 小猪 tab：从 PigHub 随机抓 10 张，点一下下载并作为图片发送
 class StickerPicker extends StatefulWidget {
-  /// 选了 emoji 文本
-  final void Function(String emoji) onEmojiSelected;
-  /// 选了猪猪图（本地缓存路径 + 是否GIF + 原文件名）
-  final void Function(String localPath, bool isGif, String displayName)
-      onPigSelected;
-
   const StickerPicker({
     super.key,
     required this.onEmojiSelected,
     required this.onPigSelected,
   });
+
+  final void Function(String emoji) onEmojiSelected;
+  final void Function(String localPath, bool isGif, String displayName)
+  onPigSelected;
 
   @override
   State<StickerPicker> createState() => _StickerPickerState();
@@ -27,31 +24,143 @@ class StickerPicker extends StatefulWidget {
 
 class _StickerPickerState extends State<StickerPicker>
     with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 2, vsync: this);
+  late final TabController _tabs = TabController(length: 5, vsync: this);
   final _sticker = StickerService();
 
   static const _emojis = <String>[
-    '😀','😁','😂','🤣','😃','😄','😅','😆','😉','😊',
-    '😋','😎','😍','😘','🥰','😗','😙','😚','🙂','🤗',
-    '🤔','🤨','😐','😑','😶','🙄','😏','😣','😥','😮',
-    '🥺','😯','😪','😫','🥱','😴','😌','😛','😜','😝',
-    '🤤','😒','😓','😔','🙃','🤐','🤫','🤥','😶‍🌫️','😇',
-    '🤠','🤡','🥳','🥴','🥵','🥶','😱','😨','😰','😥',
-    '😡','😠','🤬','😈','👿','💀','💩','🤡','👻','👽',
-    '🙏','👍','👎','👌','✌️','🤞','🤟','🤘','👈','👉',
-    '🐷','🐖','🐽','🐷','❤️','🧡','💛','💚','💙','💜',
-    '🔥','✨','⭐','🌟','💫','🎉','🎊','🎁','💯','✅',
+    '😀',
+    '😁',
+    '😂',
+    '🤣',
+    '😃',
+    '😄',
+    '😅',
+    '😆',
+    '😉',
+    '😊',
+    '😋',
+    '😎',
+    '😍',
+    '😘',
+    '🥰',
+    '😗',
+    '😙',
+    '😚',
+    '🙂',
+    '🤗',
+    '🤔',
+    '🤨',
+    '😐',
+    '😑',
+    '😶',
+    '🙄',
+    '😏',
+    '😣',
+    '😥',
+    '😮',
+    '🥺',
+    '😯',
+    '😪',
+    '😫',
+    '🥱',
+    '😴',
+    '😌',
+    '😛',
+    '😜',
+    '😝',
+    '🤤',
+    '😒',
+    '😓',
+    '😔',
+    '🙃',
+    '🤐',
+    '🤫',
+    '🤥',
+    '😶‍🌫️',
+    '😇',
+    '🤠',
+    '🤡',
+    '🥳',
+    '🥴',
+    '🥵',
+    '🥶',
+    '😱',
+    '😨',
+    '😰',
+    '😥',
+    '😡',
+    '😠',
+    '🤬',
+    '😈',
+    '👿',
+    '💀',
+    '💩',
+    '🤡',
+    '👻',
+    '👽',
+    '🙏',
+    '👍',
+    '👎',
+    '👌',
+    '✌️',
+    '🤞',
+    '🤟',
+    '🤘',
+    '👈',
+    '👉',
+    '🐷',
+    '🐖',
+    '🐽',
+    '❤️',
+    '🧡',
+    '💛',
+    '💚',
+    '💙',
+    '💜',
+    '🔥',
+    '✨',
+    '⭐',
+    '🌟',
+    '💫',
+    '🎉',
+    '🎊',
+    '🎁',
+    '💯',
+    '✅',
   ];
 
+  List<LocalSticker> _recent = [];
+  List<LocalSticker> _favorites = [];
+  List<LocalSticker> _custom = [];
   List<PigImage> _pigs = [];
+  bool _loadingLocal = true;
   bool _loadingPigs = false;
   String? _pigsError;
-  final _downloading = <String>{}; // 正在下载的 pig.id
+  final _downloading = <String>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadLocal();
+  }
 
   @override
   void dispose() {
     _tabs.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadLocal() async {
+    final recent = await _sticker.recentStickers();
+    final favorites = await _sticker.favoriteStickers();
+    final custom = await _sticker.customStickers();
+    if (!mounted) return;
+    setState(() {
+      _recent = recent;
+      _favorites = favorites;
+      _custom = custom;
+      _loadingLocal = false;
+    });
   }
 
   Future<void> _loadPigs() async {
@@ -81,37 +190,78 @@ class _StickerPickerState extends State<StickerPicker>
     setState(() => _downloading.add(pig.id));
     try {
       final path = await _sticker.downloadPig(pig);
+      await _sticker.markPigRecent(pig, path);
+      await _loadLocal();
       if (!mounted) return;
       widget.onPigSelected(path, pig.isGif, pig.filename);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('发送失败: $e'), duration: const Duration(seconds: 2)),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('发送失败: $e')));
     } finally {
       if (mounted) setState(() => _downloading.remove(pig.id));
+    }
+  }
+
+  Future<void> _addCustom() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.image);
+    final path = result?.files.single.path;
+    if (path == null) return;
+    try {
+      await _sticker.addCustomSticker(path);
+      await _loadLocal();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('添加失败: $e')));
+      }
+    }
+  }
+
+  Future<void> _toggleFavorite(LocalSticker sticker) async {
+    final favorite = !_favorites.any((item) => item.id == sticker.id);
+    await _sticker.setFavorite(sticker, favorite);
+    await _loadLocal();
+  }
+
+  Future<void> _togglePigFavorite(PigImage pig) async {
+    try {
+      await _sticker.togglePigFavorite(pig);
+      await _loadLocal();
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('收藏失败: $e')));
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      height: 260,
+      height: 310,
       child: Column(
         children: [
           TabBar(
             controller: _tabs,
+            isScrollable: true,
             tabs: const [
               Tab(icon: Icon(Icons.emoji_emotions_outlined), text: '表情'),
-              Tab(icon: Icon(Icons.pets), text: '随机小猪'),
+              Tab(icon: Icon(Icons.history), text: '最近'),
+              Tab(icon: Icon(Icons.star_outline), text: '收藏'),
+              Tab(icon: Icon(Icons.add_photo_alternate_outlined), text: '自定义'),
+              Tab(icon: Icon(Icons.pets), text: '在线小猪'),
             ],
-            labelColor: Theme.of(context).colorScheme.primary,
           ),
           Expanded(
             child: TabBarView(
               controller: _tabs,
               children: [
                 _emojiGrid(),
+                _localGrid(_recent, '还没有最近使用的表情'),
+                _localGrid(_favorites, '长按或点击在线图片即可收藏'),
+                _customGrid(),
                 _pigGrid(),
               ],
             ),
@@ -129,23 +279,89 @@ class _StickerPickerState extends State<StickerPicker>
         childAspectRatio: 1,
       ),
       itemCount: _emojis.length,
-      itemBuilder: (_, i) {
-        final e = _emojis[i];
+      itemBuilder: (_, index) {
+        final emoji = _emojis[index];
         return InkWell(
-          onTap: () => widget.onEmojiSelected(e),
+          onTap: () => widget.onEmojiSelected(emoji),
           child: Center(
-            child: Text(e, style: const TextStyle(fontSize: 22)),
+            child: Text(emoji, style: const TextStyle(fontSize: 22)),
           ),
         );
       },
     );
   }
 
+  Widget _localGrid(List<LocalSticker> stickers, String emptyText) {
+    if (_loadingLocal) return const Center(child: CircularProgressIndicator());
+    if (stickers.isEmpty) return Center(child: Text(emptyText));
+    return GridView.builder(
+      padding: const EdgeInsets.all(8),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 4,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 8,
+      ),
+      itemCount: stickers.length,
+      itemBuilder: (_, index) {
+        final sticker = stickers[index];
+        return GestureDetector(
+          onTap: () =>
+              widget.onPigSelected(sticker.path, sticker.isGif, sticker.name),
+          onLongPress: () => _showLocalActions(sticker),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Image.file(
+              File(sticker.path),
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) =>
+                  const Icon(Icons.broken_image_outlined),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showLocalActions(LocalSticker sticker) async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: ListTile(
+          leading: const Icon(Icons.star_outline),
+          title: Text(
+            _favorites.any((item) => item.id == sticker.id) ? '取消收藏' : '收藏',
+          ),
+          onTap: () => Navigator.pop(context, 'favorite'),
+        ),
+      ),
+    );
+    if (action == 'favorite') await _toggleFavorite(sticker);
+  }
+
+  Widget _customGrid() {
+    return Column(
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: Padding(
+            padding: const EdgeInsets.only(right: 8, top: 4),
+            child: FilledButton.tonalIcon(
+              onPressed: _addCustom,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('添加图片'),
+            ),
+          ),
+        ),
+        Expanded(child: _localGrid(_custom, '点击上方添加常用表情')),
+      ],
+    );
+  }
+
   Widget _pigGrid() {
     if (_pigs.isEmpty && !_loadingPigs && _pigsError == null) {
-      // 首次进入该 tab 时自动加载
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadPigs());
-      return const Center(child: Text('点下方刷新抓取小猪', style: TextStyle(color: Colors.grey)));
+      return const Center(child: Text('正在准备在线表情…'));
     }
     if (_loadingPigs && _pigs.isEmpty) {
       return const Center(child: CircularProgressIndicator());
@@ -155,7 +371,7 @@ class _StickerPickerState extends State<StickerPicker>
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(_pigsError!, style: const TextStyle(color: Colors.red, fontSize: 12)),
+            Text(_pigsError!, style: const TextStyle(color: Colors.red)),
             const SizedBox(height: 8),
             FilledButton(onPressed: _loadPigs, child: const Text('重试')),
           ],
@@ -165,11 +381,10 @@ class _StickerPickerState extends State<StickerPicker>
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
           child: Row(
             children: [
-              Text('随机 10 张小猪',
-                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+              Text('随机 10 张', style: TextStyle(color: Colors.grey.shade600)),
               const Spacer(),
               IconButton(
                 icon: const Icon(Icons.refresh, size: 20),
@@ -184,50 +399,48 @@ class _StickerPickerState extends State<StickerPicker>
             padding: const EdgeInsets.all(8),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 3,
-              childAspectRatio: 1,
-              crossAxisSpacing: 6,
-              mainAxisSpacing: 6,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
             ),
             itemCount: _pigs.length,
-            itemBuilder: (_, i) {
-              final pig = _pigs[i];
-              final dl = _downloading.contains(pig.id);
-              return GestureDetector(
-                onTap: dl ? null : () => _sendPig(pig),
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
+            itemBuilder: (_, index) {
+              final pig = _pigs[index];
+              final downloading = _downloading.contains(pig.id);
+              final favorite = _favorites.any(
+                (item) => item.id == 'pig:${pig.id}',
+              );
+              return Stack(
+                fit: StackFit.expand,
+                children: [
+                  GestureDetector(
+                    onTap: downloading ? null : () => _sendPig(pig),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
                       child: _PigThumb(url: pig.url),
                     ),
-                    if (pig.isGif)
-                      Positioned(
-                        left: 4,
-                        top: 4,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: Colors.black54,
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                          child: const Text('GIF',
-                              style: TextStyle(color: Colors.white, fontSize: 9)),
-                        ),
+                  ),
+                  Positioned(
+                    right: 2,
+                    top: 2,
+                    child: IconButton(
+                      visualDensity: VisualDensity.compact,
+                      style: IconButton.styleFrom(
+                        backgroundColor: Colors.black45,
+                        foregroundColor: favorite ? Colors.amber : Colors.white,
                       ),
-                    if (dl)
-                      Container(
-                        color: Colors.black38,
-                        child: const Center(
-                          child: SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          ),
-                        ),
+                      onPressed: () => _togglePigFavorite(pig),
+                      icon: Icon(
+                        favorite ? Icons.star : Icons.star_outline,
+                        size: 18,
                       ),
-                  ],
-                ),
+                    ),
+                  ),
+                  if (downloading)
+                    const ColoredBox(
+                      color: Colors.black38,
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+                ],
               );
             },
           ),
@@ -237,10 +450,10 @@ class _StickerPickerState extends State<StickerPicker>
   }
 }
 
-/// 猪猪缩略图：用 http 下载字节转 Image.memory（避免依赖 cached_network_image）
 class _PigThumb extends StatefulWidget {
-  final String url;
   const _PigThumb({required this.url});
+
+  final String url;
 
   @override
   State<_PigThumb> createState() => _PigThumbState();
@@ -258,13 +471,18 @@ class _PigThumbState extends State<_PigThumb> {
 
   Future<void> _load() async {
     try {
-      final resp = await http.get(Uri.parse(widget.url)).timeout(const Duration(seconds: 20));
-      if (!mounted) return;
-      if (resp.statusCode == 200) {
-        setState(() => _bytes = resp.bodyBytes);
-      } else {
-        setState(() => _failed = true);
+      final uri = Uri.tryParse(widget.url);
+      if (uri == null || uri.scheme != 'https') throw StateError('unsafe url');
+      final response = await http.get(uri).timeout(const Duration(seconds: 20));
+      final contentType = response.headers['content-type'] ?? '';
+      if (response.statusCode != 200 ||
+          response.bodyBytes.isEmpty ||
+          response.bodyBytes.length > 10 * 1024 * 1024 ||
+          (contentType.isNotEmpty && !contentType.startsWith('image/'))) {
+        throw StateError('invalid image response');
       }
+      if (!mounted) return;
+      setState(() => _bytes = response.bodyBytes);
     } catch (_) {
       if (mounted) setState(() => _failed = true);
     }
@@ -272,24 +490,16 @@ class _PigThumbState extends State<_PigThumb> {
 
   @override
   Widget build(BuildContext context) {
-    if (_bytes != null) {
-      return Image.memory(_bytes!, fit: BoxFit.cover);
-    }
+    if (_bytes != null) return Image.memory(_bytes!, fit: BoxFit.cover);
     if (_failed) {
-      return Container(
-        color: Colors.grey.shade300,
-        child: const Icon(Icons.broken_image, size: 24),
+      return ColoredBox(
+        color: Colors.grey.shade200,
+        child: const Icon(Icons.broken_image_outlined),
       );
     }
-    return Container(
-      color: Colors.grey.shade200,
-      child: const Center(
-        child: SizedBox(
-          width: 18,
-          height: 18,
-          child: CircularProgressIndicator(strokeWidth: 2),
-        ),
-      ),
+    return ColoredBox(
+      color: Colors.grey.shade100,
+      child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
     );
   }
 }

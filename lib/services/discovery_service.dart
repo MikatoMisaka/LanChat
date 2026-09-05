@@ -10,6 +10,7 @@ class DiscoveryPayload {
   final int tcpPort;
   final bool isReply;
   final String avatar;
+  final String publicKey;
 
   const DiscoveryPayload({
     required this.id,
@@ -18,16 +19,18 @@ class DiscoveryPayload {
     required this.tcpPort,
     this.isReply = false,
     this.avatar = '',
+    this.publicKey = '',
   });
 
   String encode() => jsonEncode({
-        'id': id,
-        'name': name,
-        'ip': ip,
-        'tcpPort': tcpPort,
-        if (avatar.isNotEmpty) 'avatar': avatar,
-        if (isReply) 'reply': true,
-      });
+    'id': id,
+    'name': name,
+    'ip': ip,
+    'tcpPort': tcpPort,
+    if (avatar.isNotEmpty) 'avatar': avatar,
+    if (publicKey.isNotEmpty) 'publicKey': publicKey,
+    if (isReply) 'reply': true,
+  });
 
   static DiscoveryPayload? decode(String raw) {
     try {
@@ -40,7 +43,20 @@ class DiscoveryPayload {
       if (id is! String || name is! String || ip is! String || port is! int) {
         return null;
       }
+      if (id.isEmpty ||
+          id.length > 128 ||
+          name.length > 128 ||
+          port <= 0 ||
+          port > 65535) {
+        return null;
+      }
       final avatar = m['avatar'];
+      if (avatar is String && avatar.length > 48 * 1024) return null;
+      final publicKey = m['publicKey'];
+      if (publicKey != null &&
+          (publicKey is! String || publicKey.length > 128)) {
+        return null;
+      }
       return DiscoveryPayload(
         id: id,
         name: name,
@@ -48,6 +64,7 @@ class DiscoveryPayload {
         tcpPort: port,
         isReply: m['reply'] == true,
         avatar: avatar is String ? avatar : '',
+        publicKey: publicKey is String ? publicKey : '',
       );
     } catch (_) {
       return null;
@@ -65,13 +82,15 @@ class DiscoveryService {
   RawDatagramSocket? _socket;
   Timer? _announceTimer;
   bool _running = false;
+  DateTime? _lastFullScan;
+  final Map<String, DateTime> _lastReplies = {};
 
   final String selfId;
   final String Function() selfName;
   final int Function() selfTcpPort;
   final String Function() selfIp;
   final List<String> Function() selfIps;
-  final String Function() selfAvatarB64;
+  final String Function() selfPublicKey;
 
   /// 收到其他设备的广播/应答时回调（已过滤自己）
   final void Function(DiscoveryPayload payload, String fromIp) onPeer;
@@ -82,7 +101,7 @@ class DiscoveryService {
     required this.selfTcpPort,
     required this.selfIp,
     required this.selfIps,
-    required this.selfAvatarB64,
+    required this.selfPublicKey,
     required this.onPeer,
   });
 
@@ -107,7 +126,13 @@ class DiscoveryService {
       final fromIp = dg.address.address;
       // 收到广播/探测时单播回应答（应答不再回，避免风暴）
       if (!payload.isReply) {
-        _replyTo(fromIp);
+        final lastReply = _lastReplies[fromIp];
+        if (lastReply == null ||
+            DateTime.now().difference(lastReply) >=
+                const Duration(seconds: 2)) {
+          _lastReplies[fromIp] = DateTime.now();
+          _replyTo(fromIp);
+        }
       }
       onPeer(payload, fromIp);
     });
@@ -118,13 +143,15 @@ class DiscoveryService {
 
   void _announce() {
     // 组播一次（从默认路由接口出去）
-    final data = utf8.encode(DiscoveryPayload(
-      id: selfId,
-      name: selfName(),
-      ip: selfIp(),
-      tcpPort: selfTcpPort(),
-      avatar: selfAvatarB64(),
-    ).encode());
+    final data = utf8.encode(
+      DiscoveryPayload(
+        id: selfId,
+        name: selfName(),
+        ip: selfIp(),
+        tcpPort: selfTcpPort(),
+        publicKey: selfPublicKey(),
+      ).encode(),
+    );
     try {
       _socket?.send(data, InternetAddress(multicastGroup), multicastPort);
     } catch (_) {}
@@ -136,17 +163,21 @@ class DiscoveryService {
       // payload 里的 ip 用该网段的本机地址，对方拿到即可达
       final d = myIp == selfIp()
           ? data
-          : utf8.encode(DiscoveryPayload(
-              id: selfId,
-              name: selfName(),
-              ip: myIp,
-              tcpPort: selfTcpPort(),
-              avatar: selfAvatarB64(),
-            ).encode());
+          : utf8.encode(
+              DiscoveryPayload(
+                id: selfId,
+                name: selfName(),
+                ip: myIp,
+                tcpPort: selfTcpPort(),
+                publicKey: selfPublicKey(),
+              ).encode(),
+            );
       try {
-        _socket?.send(d,
-            InternetAddress('${parts[0]}.${parts[1]}.${parts[2]}.255'),
-            multicastPort);
+        _socket?.send(
+          d,
+          InternetAddress('${parts[0]}.${parts[1]}.${parts[2]}.255'),
+          multicastPort,
+        );
       } catch (_) {}
     }
   }
@@ -158,29 +189,41 @@ class DiscoveryService {
       ip: selfIp(),
       tcpPort: selfTcpPort(),
       isReply: true,
-      avatar: selfAvatarB64(),
+      publicKey: selfPublicKey(),
     );
     try {
-      _socket?.send(utf8.encode(p.encode()), InternetAddress(ip), multicastPort);
+      _socket?.send(
+        utf8.encode(p.encode()),
+        InternetAddress(ip),
+        multicastPort,
+      );
     } catch (_) {}
   }
 
   /// 手动刷新：立即广播一次 + 所有本机网段内逐 IP 单播探测（组播被路由器/热点屏蔽时的兜底）
   Future<void> refresh() async {
     _announce();
+    final now = DateTime.now();
+    if (_lastFullScan != null &&
+        now.difference(_lastFullScan!) < const Duration(minutes: 1)) {
+      return;
+    }
+    _lastFullScan = now;
     final ips = selfIps().isEmpty ? [selfIp()] : selfIps();
     for (final ip in ips) {
       if (ip.isEmpty) continue;
       final parts = ip.split('.');
       if (parts.length != 4) continue;
       final base = '${parts[0]}.${parts[1]}.${parts[2]}';
-      final data = utf8.encode(DiscoveryPayload(
-        id: selfId,
-        name: selfName(),
-        ip: ip,
-        tcpPort: selfTcpPort(),
-        avatar: selfAvatarB64(),
-      ).encode());
+      final data = utf8.encode(
+        DiscoveryPayload(
+          id: selfId,
+          name: selfName(),
+          ip: ip,
+          tcpPort: selfTcpPort(),
+          publicKey: selfPublicKey(),
+        ).encode(),
+      );
       for (var i = 1; i <= 254; i++) {
         try {
           _socket?.send(data, InternetAddress('$base.$i'), multicastPort);
@@ -197,5 +240,7 @@ class DiscoveryService {
     _socket?.close();
     _socket = null;
     _running = false;
+    _lastFullScan = null;
+    _lastReplies.clear();
   }
 }

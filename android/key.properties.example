@@ -1,0 +1,4 @@
+storeFile=lanchat-release.jks
+storePassword=replace-with-your-local-password
+keyAlias=lanchat
+keyPassword=replace-with-your-local-password

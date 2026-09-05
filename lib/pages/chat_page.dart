@@ -3,8 +3,10 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:gal/gal.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
@@ -14,6 +16,8 @@ import 'package:uuid/uuid.dart';
 
 import '../services/app_state.dart';
 import '../services/db_service.dart';
+import '../widgets/chat_theme.dart';
+import '../widgets/media_preview.dart';
 import '../widgets/sticker_picker.dart';
 
 class ChatPage extends StatefulWidget {
@@ -34,6 +38,8 @@ class _ChatPageState extends State<ChatPage> {
   final Map<String, double> _progress = {};
   late String _deviceId;
   bool _showSticker = false;
+  bool _draggingFiles = false;
+  final List<_PendingFile> _pendingFiles = [];
   StreamSubscription<FileReceivingEvent>? _fileSub;
   final Map<String, _Receiving> _receiving = {};
 
@@ -65,8 +71,9 @@ class _ChatPageState extends State<ChatPage> {
       }
       final cur = _receiving[e.msgId];
       if (cur == null) {
-        setState(() =>
-            _receiving[e.msgId] = _Receiving(e.msgId, e.fileName, e.total));
+        setState(
+          () => _receiving[e.msgId] = _Receiving(e.msgId, e.fileName, e.total),
+        );
         _jumpBottom();
       } else if (e.received != cur.received) {
         setState(() => cur.received = e.received);
@@ -123,11 +130,23 @@ class _ChatPageState extends State<ChatPage> {
     });
     _jumpBottom();
     try {
-      await app.transport.sendText(dev.ip, dev.port, text);
+      await app.transport.sendText(
+        dev.ip,
+        dev.port,
+        text,
+        peerId: dev.id,
+        messageId: m.id,
+        timestamp: m.createdAt.millisecondsSinceEpoch,
+      );
       m.status = 1;
     } catch (_) {
       // 旧地址连不上：探测对方新地址并重试一次（IP 愈合）
-      final healed = await app.retrySendText(dev.id, text);
+      final healed = await app.retrySendText(
+        dev.id,
+        text,
+        messageId: m.id,
+        timestamp: m.createdAt.millisecondsSinceEpoch,
+      );
       m.status = healed ? 1 : 2;
     }
     await app.db.insertMessage(m);
@@ -147,6 +166,110 @@ class _ChatPageState extends State<ChatPage> {
     await _sendFile(result.files.single.path!, result.files.single.name, false);
   }
 
+  Future<void> _onFilesDropped(DropDoneDetails detail) async {
+    if (!Platform.isWindows) return;
+    final pending = <_PendingFile>[];
+    for (final item in detail.files) {
+      final path = item.path;
+      if (path.isEmpty) continue;
+      final file = File(path);
+      if (await FileSystemEntity.type(path) != FileSystemEntityType.file) {
+        continue;
+      }
+      final size = await file.length();
+      if (size > 5 * 1024 * 1024 * 1024) {
+        _toast('${item.name} 超过 5 GB，已跳过');
+        continue;
+      }
+      pending.add(
+        _PendingFile(
+          path: path,
+          name: item.name.isEmpty ? p.basename(path) : item.name,
+          isImage: _isImageName(item.name.isEmpty ? path : item.name),
+          size: size,
+        ),
+      );
+    }
+    if (!mounted || pending.isEmpty) return;
+    setState(() {
+      _pendingFiles
+        ..clear()
+        ..addAll(pending);
+      _draggingFiles = false;
+    });
+  }
+
+  Future<void> _sendPendingFiles() async {
+    if (_pendingFiles.isEmpty) return;
+    final files = List<_PendingFile>.from(_pendingFiles);
+    setState(() => _pendingFiles.clear());
+    for (final file in files) {
+      if (!mounted) return;
+      await _sendFile(file.path, file.name, file.isImage);
+    }
+  }
+
+  bool _isImageName(String name) {
+    final ext = p.extension(name).toLowerCase();
+    return {'.jpg', '.jpeg', '.png', '.gif', '.webp'}.contains(ext);
+  }
+
+  Widget _pendingFilesBar() {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.attach_file, size: 18),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '准备发送 ${_pendingFiles.length} 个文件',
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+              ),
+              TextButton(
+                onPressed: () => setState(() => _pendingFiles.clear()),
+                child: const Text('清空'),
+              ),
+              FilledButton(
+                onPressed: _sendPendingFiles,
+                child: const Text('发送'),
+              ),
+            ],
+          ),
+          ..._pendingFiles.map(
+            (file) => ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                file.isImage ? Icons.image : Icons.insert_drive_file,
+              ),
+              title: Text(
+                file.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Text(_fmtSize(file.size)),
+              trailing: IconButton(
+                tooltip: '移除',
+                onPressed: () => setState(() => _pendingFiles.remove(file)),
+                icon: const Icon(Icons.close, size: 18),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _pickImage() async {
     final app = AppStateScope.of(context);
     final dev = app.devices[_deviceId];
@@ -154,7 +277,11 @@ class _ChatPageState extends State<ChatPage> {
     if (Platform.isWindows) {
       final result = await FilePicker.platform.pickFiles(type: FileType.image);
       if (result == null || result.files.single.path == null) return;
-      await _sendFile(result.files.single.path!, result.files.single.name, true);
+      await _sendFile(
+        result.files.single.path!,
+        result.files.single.name,
+        true,
+      );
       return;
     }
     final img = await ImagePicker().pickImage(source: ImageSource.gallery);
@@ -166,8 +293,9 @@ class _ChatPageState extends State<ChatPage> {
   void _onEmoji(String emoji) {
     final cur = _controller.text;
     _controller.text = cur + emoji;
-    _controller.selection =
-        TextSelection.fromPosition(TextPosition(offset: _controller.text.length));
+    _controller.selection = TextSelection.fromPosition(
+      TextPosition(offset: _controller.text.length),
+    );
   }
 
   Future<void> _onPig(String localPath, bool isGif, String displayName) async {
@@ -197,12 +325,8 @@ class _ChatPageState extends State<ChatPage> {
     });
     _jumpBottom();
     try {
-      await app.transport.sendFile(
-        ip: dev.ip,
-        port: dev.port,
-        filePath: path,
-        fileName: name,
-        isImage: isImage,
+      await app.sendFile(
+        m,
         onProgress: (v) {
           if (mounted) setState(() => _progress[m.id] = v);
         },
@@ -210,13 +334,18 @@ class _ChatPageState extends State<ChatPage> {
       m.status = 1;
     } catch (_) {
       // 旧地址连不上：探测对方新地址并重试一次（IP 愈合）
-      final healed = await app.retrySendFile(dev.id,
-          filePath: path,
-          fileName: name,
-          isImage: isImage,
-          onProgress: (v) {
-            if (mounted) setState(() => _progress[m.id] = v);
-          });
+      final healed = await app.retrySendFile(
+        dev.id,
+        filePath: path,
+        fileName: name,
+        isImage: isImage,
+        messageId: m.id,
+        timestamp: m.createdAt.millisecondsSinceEpoch,
+        transferId: m.transferId,
+        onProgress: (v) {
+          if (mounted) setState(() => _progress[m.id] = v);
+        },
+      );
       m.status = healed ? 1 : 2;
     }
     await app.db.insertMessage(m);
@@ -232,54 +361,32 @@ class _ChatPageState extends State<ChatPage> {
     final app = AppStateScope.of(context);
     final dev = app.devices[_deviceId];
     final online = dev != null && app.isOnline(dev);
-    return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(dev?.name ?? '聊天', style: const TextStyle(fontSize: 17)),
-            Text(
-              online ? '在线' : (dev?.isManual ?? false ? '手动添加 · 连不上会提示失败' : '离线'),
-              style: TextStyle(
-                fontSize: 11,
-                color: online ? Colors.lightGreen : Colors.grey,
-              ),
-            ),
-          ],
+    final body = Column(
+      children: [
+        Expanded(
+          child: ListView.builder(
+            controller: _scroll,
+            itemCount: _messages.length + _receiving.length,
+            itemBuilder: (_, i) {
+              if (i < _messages.length) return _bubble(_messages[i]);
+              final r = _receiving.values.elementAt(i - _messages.length);
+              return _receivingBubble(r);
+            },
+          ),
         ),
-        actions: [
-          PopupMenuButton<String>(
-            onSelected: (v) =>
-                v == 'clear' ? _confirmClear() : _confirmDeleteDevice(),
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'clear', child: Text('清空聊天记录')),
-              PopupMenuItem(value: 'delete', child: Text('删除该设备')),
-            ],
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ListView.builder(
-              controller: _scroll,
-              itemCount: _messages.length + _receiving.length,
-              itemBuilder: (_, i) {
-                if (i < _messages.length) return _bubble(_messages[i]);
-                final r = _receiving.values.elementAt(i - _messages.length);
-                return _receivingBubble(r);
-              },
-            ),
-          ),
-          SafeArea(
+        if (_pendingFiles.isNotEmpty) _pendingFilesBar(),
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
             child: Row(
               children: [
                 IconButton(
-                  icon: Icon(_showSticker
-                      ? Icons.keyboard
-                      : Icons.emoji_emotions_outlined),
-                  onPressed: () =>
-                      setState(() => _showSticker = !_showSticker),
+                  icon: Icon(
+                    _showSticker
+                        ? Icons.keyboard
+                        : Icons.emoji_emotions_outlined,
+                  ),
+                  onPressed: () => setState(() => _showSticker = !_showSticker),
                   tooltip: '表情',
                 ),
                 IconButton(
@@ -300,25 +407,79 @@ class _ChatPageState extends State<ChatPage> {
                         borderRadius: BorderRadius.circular(22),
                       ),
                       contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 14, vertical: 10),
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
                     ),
                     onSubmitted: (_) => _sendText(),
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.send),
-                  onPressed: _sendText,
-                ),
+                IconButton(icon: const Icon(Icons.send), onPressed: _sendText),
               ],
             ),
           ),
-          if (_showSticker)
-            StickerPicker(
-              onEmojiSelected: _onEmoji,
-              onPigSelected: _onPig,
+        ),
+        AnimatedSize(
+          duration: MediaQuery.of(context).disableAnimations
+              ? Duration.zero
+              : const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          child: _showSticker
+              ? StickerPicker(onEmojiSelected: _onEmoji, onPigSelected: _onPig)
+              : const SizedBox.shrink(),
+        ),
+      ],
+    );
+    final styledBody = DecoratedBox(
+      decoration: const BoxDecoration(color: Color(0xFFF7FBF8)),
+      child: body,
+    );
+    return Scaffold(
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(dev?.name ?? '聊天', style: const TextStyle(fontSize: 17)),
+            Text(
+              online
+                  ? '在线'
+                  : (dev?.isManual ?? false ? '手动添加 · 连不上会提示失败' : '离线'),
+              style: TextStyle(
+                fontSize: 11,
+                color: online ? Colors.lightGreen : Colors.grey,
+              ),
             ),
+          ],
+        ),
+        actions: [
+          PopupMenuButton<String>(
+            onSelected: (v) =>
+                v == 'clear' ? _confirmClear() : _confirmDeleteDevice(),
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'clear', child: Text('清空聊天记录')),
+              PopupMenuItem(value: 'delete', child: Text('删除该设备')),
+            ],
+          ),
         ],
       ),
+      body: Platform.isWindows
+          ? DropTarget(
+              onDragEntered: (_) => setState(() => _draggingFiles = true),
+              onDragExited: (_) => setState(() => _draggingFiles = false),
+              onDragDone: (detail) => unawaited(_onFilesDropped(detail)),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  border: _draggingFiles
+                      ? Border.all(
+                          color: Theme.of(context).colorScheme.primary,
+                          width: 2,
+                        )
+                      : null,
+                ),
+                child: styledBody,
+              ),
+            )
+          : styledBody,
     );
   }
 
@@ -330,11 +491,13 @@ class _ChatPageState extends State<ChatPage> {
         content: const Text('将删除与该设备的全部消息和收到的文件'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('清空')),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('清空'),
+          ),
         ],
       ),
     );
@@ -353,11 +516,13 @@ class _ChatPageState extends State<ChatPage> {
         content: const Text('将删除该设备、全部聊天记录和收到的文件'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('删除')),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
         ],
       ),
     );
@@ -415,11 +580,13 @@ class _ChatPageState extends State<ChatPage> {
         title: const Text('删除该消息？'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('删除')),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('删除'),
+          ),
         ],
       ),
     );
@@ -459,15 +626,20 @@ class _ChatPageState extends State<ChatPage> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(r.fileName,
-                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                          Text(
+                            r.fileName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                           const SizedBox(height: 6),
                           LinearProgressIndicator(value: pct),
                           const SizedBox(height: 4),
                           Text(
                             '正在接收 ${_fmtSize(r.received)} / ${_fmtSize(r.total)}',
-                            style:
-                                const TextStyle(fontSize: 11, color: Colors.grey),
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey,
+                            ),
                           ),
                         ],
                       ),
@@ -488,6 +660,9 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   String _fmtSize(int b) {
+    if (b >= 1024 * 1024 * 1024) {
+      return '${(b / 1024 / 1024 / 1024).toStringAsFixed(2)} GB';
+    }
     if (b > 1024 * 1024) return '${(b / 1024 / 1024).toStringAsFixed(1)} MB';
     if (b > 1024) return '${(b / 1024).toStringAsFixed(0)} KB';
     return '$b B';
@@ -512,7 +687,7 @@ class _ChatPageState extends State<ChatPage> {
     final mine = m.direction == 1;
     final time = DateFormat('HH:mm').format(m.createdAt);
     final bubbleColor = mine
-        ? const Color(0xFF95EC69)
+        ? LanChatTheme.mint
         : Theme.of(context).colorScheme.surfaceContainerHighest;
     final align = mine ? Alignment.centerRight : Alignment.centerLeft;
     final radius = BorderRadius.only(
@@ -530,7 +705,7 @@ class _ChatPageState extends State<ChatPage> {
       default:
         content = ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 240),
-          child: Text(m.content),
+          child: SelectableText(m.content),
         );
     }
     final app = AppStateScope.of(context);
@@ -540,10 +715,7 @@ class _ChatPageState extends State<ChatPage> {
       onLongPress: () => _showMessageMenu(m),
       child: Container(
         padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: bubbleColor,
-          borderRadius: radius,
-        ),
+        decoration: BoxDecoration(color: bubbleColor, borderRadius: radius),
         child: content,
       ),
     );
@@ -553,14 +725,17 @@ class _ChatPageState extends State<ChatPage> {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         child: Column(
-          crossAxisAlignment:
-              mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+          crossAxisAlignment: mine
+              ? CrossAxisAlignment.end
+              : CrossAxisAlignment.start,
           children: [
             if (!mine)
               Padding(
                 padding: const EdgeInsets.only(left: 38, bottom: 2),
-                child: Text(peerName,
-                    style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                child: Text(
+                  peerName,
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
               ),
             Directionality(
               textDirection: mine ? ui.TextDirection.rtl : ui.TextDirection.ltr,
@@ -590,17 +765,25 @@ class _ChatPageState extends State<ChatPage> {
         onTap: () => Navigator.push(
           context,
           MaterialPageRoute(
-            builder: (_) => _FullImage(path: m.filePath!),
+            builder: (_) => MediaPreviewPage(
+              path: m.filePath!,
+              title: m.content,
+              onSave: () => _saveFile(m),
+              onShare: () => _shareFile(m),
+            ),
           ),
         ),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(8),
-          child: Image.file(
-            File(m.filePath!),
-            width: 200,
-            cacheWidth: 600,
-            fit: BoxFit.cover,
-            errorBuilder: (_, _, _) => _brokenImage(),
+          child: Hero(
+            tag: m.filePath!,
+            child: Image.file(
+              File(m.filePath!),
+              width: 200,
+              cacheWidth: 600,
+              fit: BoxFit.cover,
+              errorBuilder: (_, _, _) => _brokenImage(),
+            ),
           ),
         ),
       );
@@ -609,20 +792,20 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Widget _brokenImage() => Container(
-        width: 200,
-        height: 120,
-        color: Colors.grey.shade300,
-        child: const Icon(Icons.broken_image, size: 40),
-      );
+    width: 200,
+    height: 120,
+    color: Colors.grey.shade300,
+    child: const Icon(Icons.broken_image, size: 40),
+  );
 
   Widget _fileBubble(Message m) {
     final size = m.fileSize ?? 0;
-    final sizeStr = size > 1024 * 1024
-        ? '${(size / 1024 / 1024).toStringAsFixed(1)} MB'
-        : '${(size / 1024).toStringAsFixed(0)} KB';
+    final sizeStr = _fmtSize(size);
     final progress = _progress[m.id];
     return GestureDetector(
-      onTap: () => _saveFile(m),
+      onTap: () => m.direction == 1 && m.status == 2 && m.transferId != null
+          ? _resumeFile(m)
+          : _saveFile(m),
       child: SizedBox(
         width: 230,
         child: Row(
@@ -633,17 +816,18 @@ class _ChatPageState extends State<ChatPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(m.content,
-                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                  Text(m.content, maxLines: 1, overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 4),
                   progress != null
                       ? LinearProgressIndicator(value: progress)
                       : Text(
                           m.direction == 1 && m.status == 2
-                              ? '发送失败'
+                              ? (m.transferId == null ? '发送失败' : '发送失败 · 点击继续')
                               : '$sizeStr · 点击分享保存',
                           style: const TextStyle(
-                              fontSize: 11, color: Colors.grey),
+                            fontSize: 11,
+                            color: Colors.grey,
+                          ),
                         ),
                 ],
               ),
@@ -660,9 +844,18 @@ class _ChatPageState extends State<ChatPage> {
       return;
     }
     try {
+      if ((Platform.isAndroid || Platform.isIOS) && m.type == 'image') {
+        if (!await Gal.hasAccess()) await Gal.requestAccess();
+        if (!await Gal.hasAccess()) {
+          _toast('没有相册权限');
+          return;
+        }
+        await Gal.putImage(m.filePath!);
+        _toast('已保存到相册');
+        return;
+      }
       if (Platform.isWindows) {
-        final target =
-            await FilePicker.platform.saveFile(fileName: m.content);
+        final target = await FilePicker.platform.saveFile(fileName: m.content);
         if (target != null && target.isNotEmpty) {
           await File(m.filePath!).copy(target);
           _toast('已保存到 $target');
@@ -678,30 +871,63 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  Future<void> _resumeFile(Message m) async {
+    final app = AppStateScope.of(context);
+    setState(() {
+      m.status = 0;
+      _progress[m.id] = 0;
+    });
+    try {
+      await app.sendFile(
+        m,
+        onProgress: (value) {
+          if (mounted) setState(() => _progress[m.id] = value);
+        },
+      );
+      m.status = 1;
+    } catch (e) {
+      final device = app.devices[m.deviceId];
+      final healed = device != null
+          ? await app.retrySendFile(
+              m.deviceId,
+              filePath: m.filePath!,
+              fileName: m.content,
+              isImage: m.type == 'image',
+              messageId: m.id,
+              timestamp: m.createdAt.millisecondsSinceEpoch,
+              transferId: m.transferId,
+              onProgress: (value) {
+                if (mounted) setState(() => _progress[m.id] = value);
+              },
+            )
+          : false;
+      m.status = healed ? 1 : 2;
+      if (!healed) _toast('继续传输失败: $e');
+    }
+    await app.db.updateMessage(m);
+    app.recordSentMessage(m);
+    if (mounted) setState(() => _progress.remove(m.id));
+  }
+
+  Future<void> _shareFile(Message m) async {
+    if (m.filePath == null || !File(m.filePath!).existsSync()) {
+      _toast('文件不存在');
+      return;
+    }
+    try {
+      await Share.shareXFiles([XFile(m.filePath!)], text: m.content);
+    } catch (e) {
+      _toast('分享失败: $e');
+    }
+  }
+
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
-          SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
-  }
-}
-
-class _FullImage extends StatelessWidget {
-  final String path;
-  const _FullImage({required this.path});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(backgroundColor: Colors.black),
-      body: Center(
-        child: InteractiveViewer(
-          child: Image.file(File(path)),
-        ),
-      ),
-    );
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
+      );
   }
 }
 
@@ -712,4 +938,18 @@ class _Receiving {
   final int total;
   int received;
   _Receiving(this.msgId, this.fileName, this.total) : received = 0;
+}
+
+class _PendingFile {
+  const _PendingFile({
+    required this.path,
+    required this.name,
+    required this.isImage,
+    required this.size,
+  });
+
+  final String path;
+  final String name;
+  final bool isImage;
+  final int size;
 }

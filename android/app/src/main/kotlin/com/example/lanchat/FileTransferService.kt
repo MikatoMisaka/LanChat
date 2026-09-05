@@ -56,8 +56,8 @@ class FileTransferService : Service() {
                 PowerManager.PARTIAL_WAKE_LOCK, "lanchat:file_transfer"
             ).apply {
                 setReferenceCounted(false)
-                // 单次传输兜底上限 30 分钟，防止泄漏
-                acquire(30 * 60 * 1000L)
+                // 与 Dart 传输层的单次两小时上限保持一致，防止泄漏。
+                acquire(2 * 60 * 60 * 1000L)
             }
         }
         return START_NOT_STICKY

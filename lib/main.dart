@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'pages/devices_page.dart';
 import 'pages/settings_page.dart';
 import 'services/app_state.dart';
+import 'widgets/chat_theme.dart';
 
 void main() {
   // 桌面平台（Windows/Linux）没有 sqflite 原生实现，切到 FFI 版 SQLite
@@ -29,7 +31,7 @@ class _LanChatAppState extends State<LanChatApp> {
   @override
   void initState() {
     super.initState();
-    _appState.init();
+    unawaited(_appState.init().catchError((_) {}));
   }
 
   @override
@@ -45,11 +47,7 @@ class _LanChatAppState extends State<LanChatApp> {
       child: MaterialApp(
         title: 'LanChat',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF07C160),
-          ),
-        ),
+        theme: LanChatTheme.light(),
         routes: {
           '/': (context) => const DevicesPage(),
           '/settings': (context) => const SettingsPage(),
