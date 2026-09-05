@@ -17,7 +17,9 @@ locally by the running client; no external push service is required.
 1. Create DNS `A`/`AAAA` records for the chat and admin domains.
 2. Create `.env` from `.env.example` and replace every bootstrap placeholder.
 3. Create `Caddyfile` from `Caddyfile.example`. The example uses ZeroSSL for
-   regions where Let's Encrypt's ACME endpoint is unreachable.
+   regions where Let's Encrypt's ACME endpoint is unreachable. Generate EAB
+   credentials in the [ZeroSSL Developer Console](https://app.zerossl.com/developer)
+   and fill `ACME_EMAIL`, `ACME_EAB_KEY_ID`, and `ACME_EAB_MAC_KEY` in `.env`.
 4. On Linux, create the bind-mount directories and give Synapse write access:
 
    ```text

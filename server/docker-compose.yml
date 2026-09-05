@@ -41,6 +41,9 @@ services:
     environment:
       CHAT_DOMAIN: ${CHAT_DOMAIN}
       ADMIN_DOMAIN: ${ADMIN_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      ACME_EAB_KEY_ID: ${ACME_EAB_KEY_ID:-}
+      ACME_EAB_MAC_KEY: ${ACME_EAB_MAC_KEY:-}
     ports:
       - "80:80"
       - "443:443"
