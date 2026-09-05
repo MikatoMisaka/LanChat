@@ -16,7 +16,8 @@ locally by the running client; no external push service is required.
 
 1. Create DNS `A`/`AAAA` records for the chat and admin domains.
 2. Create `.env` from `.env.example` and replace every bootstrap placeholder.
-3. Create `Caddyfile` from `Caddyfile.example`.
+3. Create `Caddyfile` from `Caddyfile.example`. The example uses ZeroSSL for
+   regions where Let's Encrypt's ACME endpoint is unreachable.
 4. On Linux, create the bind-mount directories and give Synapse write access:
 
    ```text
