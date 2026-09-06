@@ -47,6 +47,10 @@ SYNAPSE_SERVER_NAME="$(read_env SYNAPSE_SERVER_NAME)"
 LANCHAT_PUBLIC_BASEURL="$(read_env LANCHAT_PUBLIC_BASEURL)"
 
 [[ -n "$SYNAPSE_SERVER_NAME" ]] || die '.env 缺少 SYNAPSE_SERVER_NAME。'
+[[ "$SYNAPSE_SERVER_NAME" != *'://' && "$SYNAPSE_SERVER_NAME" != */* ]] ||
+  die 'SYNAPSE_SERVER_NAME 只能填写域名或域名:端口，不能包含 http://、https:// 或路径。'
+[[ "$SYNAPSE_SERVER_NAME" != *[[:space:]]* ]] ||
+  die 'SYNAPSE_SERVER_NAME 不能包含空格。'
 
 if [[ "$MODE" == "domain" ]]; then
   [[ -n "$CHAT_DOMAIN" ]] || die '.env 缺少 CHAT_DOMAIN。'

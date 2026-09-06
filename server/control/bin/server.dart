@@ -21,8 +21,14 @@ Future<void> main() async {
   }
   final serverName =
       Platform.environment['LANCHAT_SERVER_NAME'] ?? 'LanChat Server';
-  final matrixServerName =
-      _optionalEnvironment('SYNAPSE_SERVER_NAME') ?? serverName;
+  final matrixServerName = _optionalEnvironment('SYNAPSE_SERVER_NAME');
+  if (matrixServerName == null || !isValidMatrixServerName(matrixServerName)) {
+    stderr.writeln(
+      'SYNAPSE_SERVER_NAME must be a host name such as chat.example.com.',
+    );
+    exitCode = 1;
+    return;
+  }
   final synapseUrl = _optionalEnvironment('SYNAPSE_INTERNAL_URL');
   final synapseConfigPath = _optionalEnvironment('SYNAPSE_CONFIG_PATH');
   final synapseToken =

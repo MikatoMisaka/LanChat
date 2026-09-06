@@ -211,4 +211,32 @@ void main() {
       '@aaaa:chat.example.com',
     );
   });
+
+  test('explains an invalid Matrix id in a member directory response', () async {
+    final service = ServerApiService(
+      client: MockClient(
+        (_) async => http.Response(
+          jsonEncode({
+            'users': [
+              {
+                'userId': 'bob',
+                'username': 'bob',
+                'displayName': 'Bob',
+              },
+            ],
+          }),
+          200,
+        ),
+      ),
+    );
+
+    await expectLater(
+      service.fetchDirectory(profile, sessionToken: 'session'),
+      throwsA(
+        predicate<ServerApiException>(
+          (error) => error.message.contains('Matrix user id'),
+        ),
+      ),
+    );
+  });
 }

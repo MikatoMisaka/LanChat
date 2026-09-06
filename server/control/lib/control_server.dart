@@ -14,6 +14,18 @@ import 'join_store.dart';
 import 'session_store.dart';
 import 'synapse_policy_store.dart';
 
+bool isValidMatrixServerName(String value) {
+  final candidate = value.trim();
+  if (candidate.isEmpty || candidate.contains(RegExp(r'\s'))) return false;
+  final uri = Uri.tryParse('https://$candidate');
+  return uri != null &&
+      uri.host.isNotEmpty &&
+      uri.path.isEmpty &&
+      uri.query.isEmpty &&
+      uri.fragment.isEmpty &&
+      uri.userInfo.isEmpty;
+}
+
 class MatrixLogin {
   const MatrixLogin({
     required this.accessToken,
@@ -502,6 +514,10 @@ class ControlServer {
   Future<Response> _directoryUsers(Request request) async {
     final context = await _userContext(request);
     if (context == null) return _json({'error': 'login_required'}, status: 401);
+    if (matrixServerName == null ||
+        !isValidMatrixServerName(matrixServerName!)) {
+      return _json({'error': 'matrix_server_name_invalid'}, status: 503);
+    }
     final query = (request.url.queryParameters['q'] ?? '').trim().toLowerCase();
     final users = await joinStore.users();
     final cutoff = DateTime.now().toUtc().subtract(const Duration(minutes: 5));
@@ -527,9 +543,7 @@ class ControlServer {
         (session) => session.lastSeenAt.isAfter(cutoff),
       );
       result.add({
-        'userId': matrixServerName == null || matrixServerName!.isEmpty
-            ? user.username
-            : '@${user.username}:$matrixServerName',
+        'userId': '@${user.username}:$matrixServerName',
         'username': user.username,
         'displayName': user.displayName,
         'isOnline': online,

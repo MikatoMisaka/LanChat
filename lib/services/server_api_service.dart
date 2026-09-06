@@ -257,11 +257,11 @@ class ServerApiService {
     if (values is! List) return const [];
     try {
       return values.map(ServerDirectoryUser.fromMap).toList();
-    } on FormatException {
+    } on FormatException catch (error) {
       throw ServerApiException(
         statusCode: response.statusCode,
         code: 'invalid_response',
-        message: '服务器返回了无效的成员列表。',
+        message: '服务器返回了无效的成员列表：${error.message}',
       );
     }
   }
@@ -404,6 +404,7 @@ class ServerApiService {
       'daily_attachment_quota_exceeded' => '今天的附件流量额度已用完。',
       'file_quota_exceeded' => '今天的附件流量额度已用完。',
       'admin_setup_required' => '服务器尚未完成首次设置。',
+      'matrix_server_name_invalid' => '服务器的 Matrix 域名配置无效，请检查 SYNAPSE_SERVER_NAME。',
       _ when raw.isNotEmpty => raw,
       _ => '服务器请求失败。',
     };
