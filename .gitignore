@@ -64,6 +64,9 @@ app.*.map.json
 /.tools/
 /.rustup/
 /.cargo/
+/.gradle-cache/
+/.tmp/
+/AppData/
 
 # Self-hosted server runtime data and secrets
 /server/.env
