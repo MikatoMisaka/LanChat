@@ -188,6 +188,12 @@ class ServerDevice {
     lastSeenAt: lastSeenAt ?? this.lastSeenAt,
   );
 
+  ServerDevice reopenForApproval() => ServerDevice(
+    userId: userId,
+    deviceId: deviceId,
+    createdAt: DateTime.now().toUtc(),
+  );
+
   static ServerDevice? fromJson(Object? value) {
     if (value is! Map) return null;
     final userId = value['userId'];
@@ -294,28 +300,70 @@ class UserLoginResult {
   final ServerDevice? device;
 }
 
+class ServerInvitation {
+  const ServerInvitation({
+    required this.id,
+    required this.singleUse,
+    required this.used,
+    required this.createdAt,
+    this.expiresAt,
+    this.revoked = false,
+  });
+
+  final String id;
+  final bool singleUse;
+  final int used;
+  final DateTime createdAt;
+  final DateTime? expiresAt;
+  final bool revoked;
+
+  Map<String, dynamic> toPublicJson() => {
+    'id': id,
+    'singleUse': singleUse,
+    'used': used,
+    'createdAt': createdAt.toUtc().toIso8601String(),
+    'expiresAt': expiresAt?.toUtc().toIso8601String(),
+    'revoked': revoked,
+  };
+}
+
 class _Invitation {
   const _Invitation({
+    required this.id,
     required this.passwordHash,
     required this.singleUse,
     required this.used,
     required this.createdAt,
     this.expiresAt,
+    this.revoked = false,
   });
 
+  final String id;
   final PasswordHash passwordHash;
   final bool singleUse;
   final int used;
   final DateTime createdAt;
   final DateTime? expiresAt;
+  final bool revoked;
 
   Map<String, dynamic> toJson() => {
+    'id': id,
     'passwordHash': passwordHash.toJson(),
     'singleUse': singleUse,
     'used': used,
     'createdAt': createdAt.toUtc().toIso8601String(),
     'expiresAt': expiresAt?.toUtc().toIso8601String(),
+    'revoked': revoked,
   };
+
+  ServerInvitation toPublicJson() => ServerInvitation(
+    id: id,
+    singleUse: singleUse,
+    used: used,
+    createdAt: createdAt,
+    expiresAt: expiresAt,
+    revoked: revoked,
+  );
 
   static _Invitation? fromJson(Object? value) {
     if (value is! Map || value['passwordHash'] is! Map) return null;
@@ -323,6 +371,9 @@ class _Invitation {
     if (createdAt == null || value['used'] is! int) return null;
     try {
       return _Invitation(
+        id: value['id'] is String && (value['id'] as String).isNotEmpty
+            ? value['id'] as String
+            : 'legacy-${createdAt.microsecondsSinceEpoch}',
         passwordHash: PasswordHash.fromJson(
           Map<String, dynamic>.from(value['passwordHash'] as Map),
         ),
@@ -330,18 +381,21 @@ class _Invitation {
         used: value['used'] as int,
         createdAt: createdAt,
         expiresAt: DateTime.tryParse('${value['expiresAt']}'),
+        revoked: value['revoked'] == true,
       );
     } on FormatException {
       return null;
     }
   }
 
-  _Invitation copyWith({required int used}) => _Invitation(
+  _Invitation copyWith({int? used, bool? revoked}) => _Invitation(
+    id: id,
     passwordHash: passwordHash,
     singleUse: singleUse,
-    used: used,
+    used: used ?? this.used,
     createdAt: createdAt,
     expiresAt: expiresAt,
+    revoked: revoked ?? this.revoked,
   );
 }
 
@@ -368,8 +422,8 @@ class JoinStore {
       normalizedDisplayName,
       normalizedDeviceId,
     );
-    if (password.length < 8) {
-      throw JoinStoreException('Password must contain 8 characters.');
+    if (password.length < 8 || password.length > 128) {
+      throw JoinStoreException('Password must contain 8-128 characters.');
     }
 
     final data = await _load();
@@ -530,10 +584,13 @@ class JoinStore {
       );
     }
     if (device.status == DeviceStatus.revoked) {
+      final reopened = device.reopenForApproval();
+      data.devices[deviceIndex] = reopened;
+      await _save(data);
       return UserLoginResult(
-        status: UserLoginStatus.deviceRevoked,
+        status: UserLoginStatus.devicePending,
         user: user,
-        device: device,
+        device: reopened,
       );
     }
 
@@ -558,6 +615,21 @@ class JoinStore {
 
   Future<List<ServerDevice>> allDevices() async =>
       (await _load()).devices.toList(growable: false);
+
+  Future<List<ServerInvitation>> invitations() async => (await _load())
+      .invitations
+      .map((invitation) => invitation.toPublicJson())
+      .toList(growable: false);
+
+  Future<void> revokeInvitation(String invitationId) async {
+    final data = await _load();
+    final index = data.invitations.indexWhere(
+      (invitation) => invitation.id == invitationId,
+    );
+    if (index < 0) throw JoinStoreException('Invitation was not found.');
+    data.invitations[index] = data.invitations[index].copyWith(revoked: true);
+    await _save(data);
+  }
 
   Future<void> approveDevice({
     required String userId,
@@ -616,8 +688,8 @@ class JoinStore {
   }
 
   Future<void> changeUserPassword(String username, String password) async {
-    if (password.length < 8) {
-      throw JoinStoreException('Password must contain 8 characters.');
+    if (password.length < 8 || password.length > 128) {
+      throw JoinStoreException('Password must contain 8-128 characters.');
     }
     final data = await _load();
     final normalized = username.trim().toLowerCase();
@@ -640,6 +712,7 @@ class JoinStore {
     final now = DateTime.now().toUtc();
     data.invitations.add(
       _Invitation(
+        id: _uuid.v4(),
         passwordHash: await PasswordHash.create(code),
         singleUse: singleUse,
         used: 0,
@@ -658,6 +731,7 @@ class JoinStore {
     final now = DateTime.now().toUtc();
     for (var i = 0; i < data.invitations.length; i++) {
       final invite = data.invitations[i];
+      if (invite.revoked) continue;
       if (invite.expiresAt != null && invite.expiresAt!.isBefore(now)) continue;
       if (invite.singleUse && invite.used > 0) continue;
       if (await invite.passwordHash.verify(code)) return i;

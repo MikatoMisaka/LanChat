@@ -30,11 +30,22 @@ void main() {
     );
 
     expect(html.statusCode, 200);
-    expect(await html.readAsString(), contains('data-view="overview"'));
+    final htmlBody = await html.readAsString();
+    expect(htmlBody, contains('data-view="overview"'));
+    expect(htmlBody, contains('max-file-mb'));
+    expect(htmlBody, contains('runtime-status'));
+    expect(
+      htmlBody,
+      contains('docker compose --env-file .env restart synapse'),
+    );
+    expect(htmlBody, contains('reset-password-form'));
     expect(css.statusCode, 200);
     expect(await css.readAsString(), contains('--jade'));
     expect(js.statusCode, 200);
-    expect(await js.readAsString(), contains('/api/v1/admin/requests'));
+    final jsBody = await js.readAsString();
+    expect(jsBody, contains('/api/v1/admin/requests'));
+    expect(jsBody, contains('maxFileBytes'));
+    expect(jsBody, contains('/api/v1/admin/invitations'));
     await directory.delete(recursive: true);
   });
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -11,6 +12,7 @@ import 'package:shelf_router/shelf_router.dart';
 import 'config_store.dart';
 import 'join_store.dart';
 import 'session_store.dart';
+import 'synapse_policy_store.dart';
 
 class MatrixLogin {
   const MatrixLogin({
@@ -28,6 +30,8 @@ abstract interface class MatrixGateway {
   Future<void> createUser(String username, String password, String displayName);
 
   Future<MatrixLogin> loginUser(String username, String password);
+
+  Future<String?> userIdForToken(String accessToken);
 
   Future<void> revokeUserDevice(String username, String matrixDeviceId);
 
@@ -57,7 +61,9 @@ class ControlServer {
     JoinStore? joinStore,
     SessionStore? sessionStore,
     this.matrixGateway,
+    this.matrixServerName,
     this.matrixProxyUrl,
+    this.synapseConfigFile,
     http.Client? proxyClient,
     this.webDirectory,
   }) : joinStore =
@@ -82,11 +88,15 @@ class ControlServer {
   final JoinStore joinStore;
   final SessionStore sessionStore;
   final MatrixGateway? matrixGateway;
+  final String? matrixServerName;
   final Uri? matrixProxyUrl;
+  final File? synapseConfigFile;
   final Directory? webDirectory;
   final http.Client _proxyClient;
   final Map<String, DateTime> _adminSessions = {};
   final _random = Random.secure();
+  final DateTime _startedAt = DateTime.now().toUtc();
+  bool _synapseRestartRequired = false;
   HttpServer? _server;
 
   Handler get handler {
@@ -111,6 +121,7 @@ class ControlServer {
       ..post('/api/v1/auth/login', _userLogin)
       ..post('/api/v1/auth/logout', _userLogout)
       ..get('/api/v1/me', _me)
+      ..get('/api/v1/directory/users', _directoryUsers)
       ..post('/api/v1/admin/setup', _adminSetup)
       ..post('/api/v1/admin/login', _adminLogin)
       ..get('/api/v1/admin/config', _adminConfig)
@@ -122,6 +133,8 @@ class ControlServer {
       ..post('/api/v1/admin/requests/<requestId>/approve', _approveJoin)
       ..post('/api/v1/admin/requests/<requestId>/reject', _rejectJoin)
       ..post('/api/v1/admin/invitations', _createInvitation)
+      ..get('/api/v1/admin/invitations', _listInvitations)
+      ..delete('/api/v1/admin/invitations/<invitationId>', _revokeInvitation)
       ..get('/api/v1/admin/devices/pending', _pendingDevices)
       ..get('/api/v1/admin/users', _listUsers)
       ..post('/api/v1/admin/users/<userId>/password', _resetUserPassword)
@@ -160,16 +173,63 @@ class ControlServer {
     final target = matrixProxyUrl!.resolve(
       request.url.path + (request.url.hasQuery ? '?${request.url.query}' : ''),
     );
-    final body = BytesBuilder(copy: false);
-    await for (final chunk in request.read()) {
-      body.add(chunk);
+    final uploadLimit = await _proxyUploadLimit(request);
+    final contentLength =
+        request.contentLength ??
+        int.tryParse(request.headers['content-length'] ?? '');
+    if (uploadLimit != null &&
+        contentLength != null &&
+        contentLength > uploadLimit) {
+      return _json({
+        'error': 'upload_too_large',
+        'maxBytes': uploadLimit,
+      }, status: 413);
     }
-    final outbound = http.Request(request.method, target)
-      ..headers.addAll(_proxyHeaders(request.headers))
-      ..bodyBytes = body.takeBytes();
+    if (uploadLimit != null && contentLength != null) {
+      final matrixToken = _bearerToken(request);
+      final gateway = matrixGateway;
+      if (matrixToken != null && gateway != null) {
+        final userId = await gateway.userIdForToken(matrixToken);
+        if (userId != null) {
+          final contentType = request.headers['content-type'] ?? '';
+          final allowed = contentType.toLowerCase().startsWith('image/')
+              ? store.allowImage(userId, contentLength)
+              : store.allowFile(userId, contentLength);
+          if (!allowed) {
+            return _json({
+              'error': 'daily_attachment_quota_exceeded',
+            }, status: 429);
+          }
+        }
+      }
+    }
+    final abort = Completer<void>();
+    final outbound =
+        http.AbortableStreamedRequest(
+            request.method,
+            target,
+            abortTrigger: abort.future,
+          )
+          ..headers.addAll(_proxyHeaders(request.headers))
+          ..contentLength = contentLength;
     try {
-      final upstream = await _proxyClient.send(outbound);
-      final bytes = await upstream.stream.toBytes();
+      final upstreamFuture = _proxyClient.send(outbound);
+      var forwarded = 0;
+      await for (final chunk in request.read()) {
+        forwarded += chunk.length;
+        if (uploadLimit != null && forwarded > uploadLimit) {
+          abort.complete();
+          unawaited(outbound.sink.close().catchError((_) {}));
+          unawaited(upstreamFuture.then<void>((_) {}, onError: (_) {}));
+          return _json({
+            'error': 'upload_too_large',
+            'maxBytes': uploadLimit,
+          }, status: 413);
+        }
+        outbound.sink.add(chunk);
+      }
+      await outbound.sink.close();
+      final upstream = await upstreamFuture;
       final headers = <String, String>{};
       for (final entry in upstream.headers.entries) {
         if (entry.key == 'content-length' ||
@@ -179,7 +239,11 @@ class ControlServer {
         }
         headers[entry.key] = entry.value;
       }
-      return Response(upstream.statusCode, body: bytes, headers: headers);
+      return Response(
+        upstream.statusCode,
+        body: upstream.stream,
+        headers: headers,
+      );
     } on http.ClientException catch (error) {
       return _json({
         'error': 'matrix_unavailable',
@@ -191,6 +255,19 @@ class ControlServer {
         'detail': '$error',
       }, status: 502);
     }
+  }
+
+  Future<int?> _proxyUploadLimit(Request request) async {
+    if (request.method != 'POST' && request.method != 'PUT') return null;
+    final path = request.url.path.isEmpty
+        ? request.requestedUri.path
+        : request.url.path;
+    if (!path.contains('/media/')) return null;
+    final config = await store.config;
+    final contentType = request.headers['content-type'] ?? '';
+    return contentType.toLowerCase().startsWith('image/')
+        ? config.maxImageBytes
+        : config.maxFileBytes;
   }
 
   Map<String, String> _proxyHeaders(Map<String, String> source) {
@@ -250,6 +327,7 @@ class ControlServer {
       'setupRequired': config.setupRequired,
       'encryptionMode': config.encryptionMode,
       'maxImageBytes': config.maxImageBytes,
+      'maxFileBytes': config.maxFileBytes,
       'retentionDays': config.retentionDays,
     });
   }
@@ -265,6 +343,7 @@ class ControlServer {
       'serverName': serverName,
       'encryptionMode': config.encryptionMode,
       'maxImageBytes': config.maxImageBytes,
+      'maxFileBytes': config.maxFileBytes,
       'retentionDays': config.retentionDays,
     });
   }
@@ -285,11 +364,19 @@ class ControlServer {
     final body = await _readJson(request);
     final userId = body['userId'];
     final imageBytes = body['imageBytes'] ?? 0;
-    if (userId is! String || imageBytes is! int || imageBytes < 0) {
+    final fileBytes = body['fileBytes'] ?? 0;
+    if (userId is! String ||
+        imageBytes is! int ||
+        imageBytes < 0 ||
+        fileBytes is! int ||
+        fileBytes < 0) {
       return _json({'error': 'invalid_usage'}, status: 400);
     }
     if (imageBytes > 0 && !store.allowImage(userId, imageBytes)) {
       return _json({'error': 'image_quota_exceeded'}, status: 429);
+    }
+    if (fileBytes > 0 && !store.allowFile(userId, fileBytes)) {
+      return _json({'error': 'file_quota_exceeded'}, status: 429);
     }
     store.recordMessage(userId: userId);
     return _json({'ok': true});
@@ -412,6 +499,50 @@ class ControlServer {
     });
   }
 
+  Future<Response> _directoryUsers(Request request) async {
+    final context = await _userContext(request);
+    if (context == null) return _json({'error': 'login_required'}, status: 401);
+    final query = (request.url.queryParameters['q'] ?? '').trim().toLowerCase();
+    final users = await joinStore.users();
+    final cutoff = DateTime.now().toUtc().subtract(const Duration(minutes: 5));
+    final result = <Map<String, dynamic>>[];
+    for (final user in users) {
+      if (user.username == context.user.username || user.disabled) continue;
+      if (query.isNotEmpty &&
+          !'${user.username} ${user.displayName}'.toLowerCase().contains(
+            query,
+          )) {
+        continue;
+      }
+      final sessions = await sessionStore.sessionsForUser(user.username);
+      final devices = await joinStore.devicesForUser(user.username);
+      final latestSeen = devices
+          .map((device) => device.lastSeenAt)
+          .whereType<DateTime>()
+          .fold<DateTime?>(null, (latest, value) {
+            if (latest == null || value.isAfter(latest)) return value;
+            return latest;
+          });
+      final online = sessions.any(
+        (session) => session.lastSeenAt.isAfter(cutoff),
+      );
+      result.add({
+        'userId': matrixServerName == null || matrixServerName!.isEmpty
+            ? user.username
+            : '@${user.username}:$matrixServerName',
+        'username': user.username,
+        'displayName': user.displayName,
+        'isOnline': online,
+        'lastSeen': latestSeen?.toUtc().toIso8601String(),
+      });
+    }
+    result.sort(
+      (left, right) =>
+          '${left['displayName']}'.compareTo('${right['displayName']}'),
+    );
+    return _json({'users': result});
+  }
+
   Future<Response> _adminSetup(Request request) async {
     final body = await _readJson(request);
     final bootstrapCode = body['bootstrapCode'];
@@ -471,10 +602,14 @@ class ControlServer {
       'setupRequired': config.setupRequired,
       'encryptionMode': config.encryptionMode,
       'maxImageBytes': config.maxImageBytes,
+      'maxFileBytes': config.maxFileBytes,
       'retentionDays': config.retentionDays,
       'perUserDailyImageBytes': config.perUserDailyImageBytes,
       'globalDailyImageBytes': config.globalDailyImageBytes,
       'groupInviteConfigured': config.accessCodeHash != null,
+      'matrixBridgeConfigured': matrixGateway != null,
+      'matrixProxyConfigured': matrixProxyUrl != null,
+      'synapseRestartRequired': _synapseRestartRequired,
     });
   }
 
@@ -488,10 +623,20 @@ class ControlServer {
             ? body['encryptionMode'] as String
             : null,
         maxImageBytes: _optionalInt(body['maxImageBytes']),
+        maxFileBytes: _optionalInt(body['maxFileBytes']),
         retentionDays: _optionalInt(body['retentionDays']),
         perUserDailyImageBytes: _optionalInt(body['perUserDailyImageBytes']),
         globalDailyImageBytes: _optionalInt(body['globalDailyImageBytes']),
       );
+      final policyFile = synapseConfigFile;
+      if (policyFile != null) {
+        final current = await store.config;
+        await SynapsePolicyStore(policyFile).update(
+          retentionDays: current.retentionDays,
+          maxUploadBytes: 500 * 1024 * 1024,
+        );
+        _synapseRestartRequired = true;
+      }
       return await _adminConfig(request);
     } catch (error) {
       return _json({'error': '$error'}, status: 400);
@@ -552,6 +697,12 @@ class ControlServer {
       'pendingDevices': devices
           .where((device) => device.status == DeviceStatus.pending)
           .length,
+      'controlUptimeSeconds': DateTime.now()
+          .toUtc()
+          .difference(_startedAt)
+          .inSeconds,
+      'matrixBridgeConfigured': matrixGateway != null,
+      'matrixProxyConfigured': matrixProxyUrl != null,
     });
   }
 
@@ -632,6 +783,31 @@ class ControlServer {
         'singleUse': singleUse,
         'lifetimeDays': rawLifetime == 0 ? null : lifetime?.inDays,
       });
+    } on JoinStoreException catch (error) {
+      return _json({'error': error.message}, status: 400);
+    }
+  }
+
+  Future<Response> _listInvitations(Request request) async {
+    final denied = await _requireAdmin(request);
+    if (denied != null) return denied;
+    final invitations = await joinStore.invitations();
+    return _json({
+      'invitations': invitations
+          .map((invitation) => invitation.toPublicJson())
+          .toList(),
+    });
+  }
+
+  Future<Response> _revokeInvitation(
+    Request request,
+    String invitationId,
+  ) async {
+    final denied = await _requireAdmin(request);
+    if (denied != null) return denied;
+    try {
+      await joinStore.revokeInvitation(Uri.decodeComponent(invitationId));
+      return _json({'ok': true});
     } on JoinStoreException catch (error) {
       return _json({'error': error.message}, status: 400);
     }
@@ -910,6 +1086,20 @@ class SynapseAdminClient implements MatrixGateway {
       userId: body['user_id'] as String,
       deviceId: body['device_id'] as String,
     );
+  }
+
+  @override
+  Future<String?> userIdForToken(String accessToken) async {
+    if (accessToken.trim().isEmpty) return null;
+    final response = await _client.get(
+      baseUrl.resolve('/_matrix/client/v3/account/whoami'),
+      headers: {'authorization': 'Bearer $accessToken'},
+    );
+    if (response.statusCode != 200) return null;
+    final body = jsonDecode(response.body);
+    return body is Map && body['user_id'] is String
+        ? body['user_id'] as String
+        : null;
   }
 
   Future<List<Map<String, dynamic>>> listUsers() async {

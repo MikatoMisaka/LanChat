@@ -28,10 +28,12 @@ services:
       LANCHAT_BOOTSTRAP_ACCESS_CODE: ${LANCHAT_BOOTSTRAP_ACCESS_CODE:-}
       SYNAPSE_INTERNAL_URL: http://synapse:8008
       SYNAPSE_SERVER_NAME: ${SYNAPSE_SERVER_NAME}
+      SYNAPSE_CONFIG_PATH: /synapse-data/homeserver.yaml
       SYNAPSE_ADMIN_TOKEN_FILE: /data/matrix-admin-token
       LANCHAT_WEB_ROOT: /app/web
     volumes:
       - ./data/control:/data
+      - ./synapse/data:/synapse-data
     depends_on:
       synapse:
         condition: service_healthy

@@ -149,6 +149,13 @@ label input:focus, label select:focus, .search-box input:focus { border-color: v
 .hero-emblem::before { inset: 13px; }
 .hero-emblem::after { inset: -11px; border-style: dashed; opacity: .55; }
 .hero-emblem i { position: absolute; right: -9px; bottom: 15px; width: 8px; height: 8px; border-radius: 50%; background: #e7bd67; box-shadow: 0 0 16px #e7bd67; }
+.runtime-status { display: flex; align-items: center; flex-wrap: wrap; gap: 16px 25px; margin: 13px 0 0; padding: 12px 17px; border: 1px solid var(--line); background: rgba(255, 253, 248, .72); color: #718579; font-size: 10px; font-weight: 800; }
+.runtime-status span { display: inline-flex; align-items: center; gap: 7px; }
+.runtime-status i { display: block; width: 7px; height: 7px; border-radius: 50%; background: #b8c3ba; }
+.runtime-status i.status-ok { background: var(--jade); box-shadow: 0 0 0 4px rgba(47, 135, 104, .1); }
+.runtime-status i.status-warn { background: var(--orange); box-shadow: 0 0 0 4px rgba(201, 107, 59, .1); }
+.runtime-status strong { color: var(--ink); }
+.runtime-status small { margin-left: auto; color: #9aa99e; font-size: 9px; font-weight: 400; }
 .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 13px 0 28px; }
 .metric-card { min-height: 135px; padding: 18px 19px; border: 1px solid var(--line); background: rgba(255, 253, 248, .8); }
 .metric-card.metric-warm { border-top: 3px solid var(--orange); background: #fffaf3; }
@@ -208,6 +215,13 @@ label input:focus, label select:focus, .search-box input:focus { border-color: v
 .code-reveal > div { display: flex; align-items: center; gap: 9px; }
 .code-reveal code { min-width: 0; overflow: hidden; color: var(--ink); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 13px; font-weight: 800; letter-spacing: .04em; text-overflow: ellipsis; white-space: nowrap; }
 .code-reveal small { display: block; margin-top: 10px; color: #a08b5d; font-size: 9px; line-height: 1.5; }
+.invitation-list { margin-top: 21px; border-top: 1px dashed var(--line-strong); }
+.invitation-title { padding: 15px 0 7px; color: #82948a; font-size: 9px; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
+.invitation-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 0; border-top: 1px solid var(--line); }
+.invitation-row strong, .invitation-row small { display: block; }
+.invitation-row strong { font-size: 11px; }
+.invitation-row small { margin-top: 4px; color: #98a69c; font-size: 9px; }
+.invitation-empty { padding-top: 15px; color: #98a69c; font-size: 10px; }
 .copy-button { flex: 0 0 auto; padding: 5px 8px; border: 1px solid rgba(189, 154, 79, .45); background: transparent; color: #94763a; font-size: 10px; font-weight: 900; }
 .copy-button:hover { background: rgba(255,255,255,.55); }
 .privacy-note { display: flex; align-items: center; gap: 15px; margin-top: 13px; padding: 16px 20px; border: 1px solid rgba(47, 135, 104, .2); background: rgba(220, 236, 225, .46); }
@@ -254,11 +268,16 @@ label input:focus, label select:focus, .search-box input:focus { border-color: v
 .locked-setting strong { font-size: 11px; }
 .locked-setting small { margin-top: 4px; color: #91a197; font-size: 9px; line-height: 1.5; }
 .locked-label { color: var(--jade); font-size: 8px; font-weight: 900; letter-spacing: .13em; }
+.restart-notice { display: grid; gap: 8px; margin-top: 16px; padding: 14px; border-left: 3px solid var(--orange); background: var(--orange-soft); }
+.restart-notice strong { color: #9f4f2b; font-size: 11px; }
+.restart-notice small { color: #a76b4e; font-size: 10px; line-height: 1.5; }
+.restart-notice code { overflow-wrap: anywhere; color: #74452f; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; }
 .device-dialog { width: min(540px, calc(100% - 32px)); padding: 27px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); box-shadow: var(--shadow); }
 .device-dialog::backdrop { background: rgba(23, 59, 49, .38); backdrop-filter: blur(4px); }
 .dialog-heading { display: flex; align-items: start; justify-content: space-between; }
 .dialog-heading h3 { margin: 0; font-family: var(--display); font-size: 30px; font-weight: 400; }
 .dialog-devices { margin-top: 23px; }
+.dialog-form { margin-top: 23px; }
 .dialog-device { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; border-top: 1px solid var(--line); }
 .dialog-device strong, .dialog-device small { display: block; }
 .dialog-device strong { font-size: 12px; }

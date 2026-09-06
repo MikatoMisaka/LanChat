@@ -19,12 +19,29 @@ class ServerApiException implements Exception {
   String toString() => message;
 }
 
+enum ServerProbeState { online, offline }
+
+class ServerProbeResult {
+  const ServerProbeResult({
+    required this.state,
+    required this.checkedAt,
+    this.message,
+    this.info,
+  });
+
+  final ServerProbeState state;
+  final DateTime checkedAt;
+  final String? message;
+  final ServerInfo? info;
+}
+
 class ServerInfo {
   const ServerInfo({
     required this.serverName,
     required this.setupRequired,
     required this.encryptionMode,
     required this.maxImageBytes,
+    required this.maxFileBytes,
     required this.retentionDays,
   });
 
@@ -32,6 +49,7 @@ class ServerInfo {
   final bool setupRequired;
   final String encryptionMode;
   final int maxImageBytes;
+  final int maxFileBytes;
   final int retentionDays;
 
   bool get e2ee => encryptionMode == 'e2ee';
@@ -51,6 +69,12 @@ class ServerInfo {
         20 * 1024 * 1024,
         1,
         20 * 1024 * 1024,
+      ),
+      maxFileBytes: _boundedInt(
+        data['maxFileBytes'],
+        100 * 1024 * 1024,
+        1,
+        500 * 1024 * 1024,
       ),
       retentionDays: _boundedInt(data['retentionDays'], 30, 1, 365),
     );
@@ -76,6 +100,38 @@ class ServerJoinResult {
       throw const FormatException('Invalid join response.');
     }
     return ServerJoinResult(requestId: requestId, status: status);
+  }
+}
+
+class ServerDirectoryUser {
+  const ServerDirectoryUser({
+    required this.userId,
+    required this.username,
+    required this.displayName,
+    this.isOnline = false,
+    this.lastSeen,
+  });
+
+  final String userId;
+  final String username;
+  final String displayName;
+  final bool isOnline;
+  final DateTime? lastSeen;
+
+  factory ServerDirectoryUser.fromMap(Object? value) {
+    if (value is! Map ||
+        value['userId'] is! String ||
+        value['username'] is! String ||
+        value['displayName'] is! String) {
+      throw const FormatException('Invalid directory user.');
+    }
+    return ServerDirectoryUser(
+      userId: value['userId'] as String,
+      username: value['username'] as String,
+      displayName: value['displayName'] as String,
+      isOnline: value['isOnline'] == true,
+      lastSeen: DateTime.tryParse('${value['lastSeen']}'),
+    );
   }
 }
 
@@ -153,6 +209,52 @@ class ServerApiService {
         statusCode: response.statusCode,
         code: 'invalid_response',
         message: '服务器返回了无效的能力信息。',
+      );
+    }
+  }
+
+  Future<ServerProbeResult> probe(ServerProfile profile) async {
+    final checkedAt = DateTime.now();
+    try {
+      await _send(profile, 'GET', 'healthz');
+      return ServerProbeResult(
+        state: ServerProbeState.online,
+        checkedAt: checkedAt,
+      );
+    } on ServerApiException catch (error) {
+      return ServerProbeResult(
+        state: ServerProbeState.offline,
+        checkedAt: checkedAt,
+        message: error.message,
+      );
+    } catch (error) {
+      return ServerProbeResult(
+        state: ServerProbeState.offline,
+        checkedAt: checkedAt,
+        message: '$error',
+      );
+    }
+  }
+
+  Future<List<ServerDirectoryUser>> fetchDirectory(
+    ServerProfile profile, {
+    required String sessionToken,
+    String query = '',
+  }) async {
+    final term = query.trim();
+    final path = term.isEmpty
+        ? 'api/v1/directory/users'
+        : 'api/v1/directory/users?q=${Uri.encodeQueryComponent(term)}';
+    final response = await _send(profile, 'GET', path, token: sessionToken);
+    final values = response.body['users'];
+    if (values is! List) return const [];
+    try {
+      return values.map(ServerDirectoryUser.fromMap).toList();
+    } on FormatException {
+      throw ServerApiException(
+        statusCode: response.statusCode,
+        code: 'invalid_response',
+        message: '服务器返回了无效的成员列表。',
       );
     }
   }
@@ -255,13 +357,13 @@ class ServerApiService {
     if (token != null && token.isNotEmpty) {
       headers['authorization'] = 'Bearer $token';
     }
-    final requestBody = body == null ? null : jsonEncode(body);
     final uri = profile.uri.resolve(path);
-    final response = switch (method) {
-      'GET' => await _client.get(uri, headers: headers),
-      'POST' => await _client.post(uri, headers: headers, body: requestBody),
+    final requestBody = body == null ? null : jsonEncode(body);
+    final response = await (switch (method) {
+      'GET' => _client.get(uri, headers: headers),
+      'POST' => _client.post(uri, headers: headers, body: requestBody),
       _ => throw ArgumentError.value(method, 'method'),
-    };
+    }).timeout(const Duration(seconds: 10));
     final decoded = _decodeBody(response.body);
     if (!acceptedStatuses.contains(response.statusCode)) {
       final error = decoded['error'];
@@ -289,6 +391,9 @@ class ServerApiService {
     'user_disabled' => '这个账号已被管理员禁用。',
     'device_revoked' => '这台设备已被管理员撤销。',
     'chat_backend_unavailable' => '服务器聊天引擎暂时不可用。',
+    'upload_too_large' => '文件超过服务器允许的大小。',
+    'daily_attachment_quota_exceeded' => '今天的附件流量额度已用完。',
+    'file_quota_exceeded' => '今天的附件流量额度已用完。',
     'admin_setup_required' => '服务器尚未完成首次设置。',
     _ => '服务器请求失败。',
   };

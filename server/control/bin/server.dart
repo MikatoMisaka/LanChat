@@ -24,6 +24,7 @@ Future<void> main() async {
   final matrixServerName =
       _optionalEnvironment('SYNAPSE_SERVER_NAME') ?? serverName;
   final synapseUrl = _optionalEnvironment('SYNAPSE_INTERNAL_URL');
+  final synapseConfigPath = _optionalEnvironment('SYNAPSE_CONFIG_PATH');
   final synapseToken =
       _optionalEnvironment('SYNAPSE_ADMIN_TOKEN') ??
       await _optionalFile('SYNAPSE_ADMIN_TOKEN_FILE');
@@ -40,6 +41,9 @@ Future<void> main() async {
     serverName: serverName,
     matrixGateway: matrixGateway,
     matrixProxyUrl: synapseUrl == null ? null : Uri.parse(synapseUrl),
+    synapseConfigFile: synapseConfigPath == null
+        ? null
+        : File(synapseConfigPath),
     webDirectory: Directory(
       Platform.environment['LANCHAT_WEB_ROOT'] ?? '/app/web',
     ),

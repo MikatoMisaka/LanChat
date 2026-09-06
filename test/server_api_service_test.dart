@@ -37,6 +37,7 @@ void main() {
     expect(info.serverName, 'Home');
     expect(info.setupRequired, isFalse);
     expect(info.maxImageBytes, 1024);
+    expect(info.maxFileBytes, 100 * 1024 * 1024);
   });
 
   test('submits a join request and maps a pending device login', () async {
@@ -104,5 +105,66 @@ void main() {
     expect(login.matrixAccessToken, 'matrix-session');
     expect(login.matrixUserId, '@alice:example');
     expect(login.matrixDeviceId, 'MATRIX-PHONE');
+  });
+
+  test(
+    'loads the complete member directory with the LanChat session',
+    () async {
+      final service = ServerApiService(
+        client: MockClient((request) async {
+          expect(request.method, 'GET');
+          expect(request.url.path, '/api/v1/directory/users');
+          expect(request.headers['authorization'], 'Bearer lanchat-session');
+          return http.Response(
+            jsonEncode({
+              'users': [
+                {
+                  'userId': '@bob:example',
+                  'username': 'bob',
+                  'displayName': 'Bob',
+                  'isOnline': true,
+                },
+              ],
+            }),
+            200,
+          );
+        }),
+      );
+
+      final users = await service.fetchDirectory(
+        profile,
+        sessionToken: 'lanchat-session',
+      );
+
+      expect(users.single.userId, '@bob:example');
+      expect(users.single.isOnline, isTrue);
+    },
+  );
+
+  test('probes an online server without requiring user credentials', () async {
+    final service = ServerApiService(
+      client: MockClient((request) async {
+        expect(request.url.path, '/healthz');
+        return http.Response(
+          jsonEncode({'status': 'ok', 'setupRequired': false}),
+          200,
+        );
+      }),
+    );
+
+    final result = await service.probe(profile);
+
+    expect(result.state, ServerProbeState.online);
+    expect(result.info, isNull);
+  });
+
+  test('maps a failed server probe to an offline state', () async {
+    final service = ServerApiService(
+      client: MockClient((_) async => http.Response('', 503)),
+    );
+
+    final result = await service.probe(profile);
+
+    expect(result.state, ServerProbeState.offline);
   });
 }

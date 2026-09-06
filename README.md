@@ -21,6 +21,7 @@ LanChat 是一个 Flutter 聊天软件。局域网设备之间可以直接通信
 - 用户使用邀请码、用户名、密码和昵称提交入群申请。
 - 管理员网页审批账号和每台新设备。
 - 远程文字和图片通过内部 Matrix/Synapse 传输层转发。
+- 服务器支持文字、表情、图片和默认 100 MB 以内的小文件；大文件仍然只走局域网直连。
 - 客户端只接收服务器换发的内部会话，不需要填写 Matrix 账号或 access token。
 - 远程图片默认最多 20 MB；大文件仍然只走局域网直连。
 - 消息默认保留 30 天，管理员可以在控制室修改保留时间和容量限制。
@@ -64,6 +65,7 @@ sudo chown -R 991:991 synapse/data
 docker compose --env-file .env run --rm synapse generate
 docker compose --env-file .env up -d --build
 docker compose --env-file .env logs control synapse-bootstrap
+docker compose --env-file .env restart synapse
 ```
 
 编辑 `.env` 时至少确认：
@@ -110,9 +112,12 @@ git pull --ff-only
 cd server
 docker compose --env-file .env up -d --build
 docker compose --env-file .env logs control synapse-bootstrap
+docker compose --env-file .env restart synapse
 ```
 
 旧版本的 `.env` 中如果还留有 `SYNAPSE_ADMIN_TOKEN`，新控制室不要求它；真正的内部 token 会由 `synapse-bootstrap` 写入 `data/control/`。`.env`、生成的 `homeserver.yaml`、token、密钥和聊天数据都不要提交到 Git。
+
+如果服务器上已有未被 Git 跟踪的 `Caddyfile`，升级时也要同步新的 Matrix 路由：先备份后用仓库里的 `Caddyfile.example` 重新生成 `Caddyfile`，再执行 Compose 重建。否则上传会绕过 control 的文件策略。
 
 ## 开发环境
 
@@ -133,23 +138,32 @@ flutter test
 flutter run -d windows
 ```
 
-Windows 构建：
+Windows 基础版构建：
 
 ```powershell
-.\tooling\flutter-local-rust.ps1 build windows --release
+.\tooling\build-lanchat.ps1 -Edition basic -Platform windows
 ```
 
 基础版 Android 构建：
 
 ```powershell
-.\tooling\flutter-local-rust.ps1 build apk --release
+.\tooling\build-lanchat.ps1 -Edition basic -Platform android
 ```
 
 服务器版 Android 构建：
 
 ```powershell
-.\tooling\flutter-local-rust.ps1 build apk --release --dart-define=LANCHAT_SERVER_EDITION=true
+.\tooling\build-lanchat.ps1 -Edition server -Platform android
 ```
+
+服务器版 Windows 构建：
+
+```powershell
+.\tooling\build-lanchat.ps1 -Edition server -Platform windows
+```
+
+产物分别放在 `release/` 下。服务器版构建脚本会自动加入
+`LANCHAT_SERVER_EDITION=true`，不会生成缺少服务器入口的基础版程序。
 
 控制服务测试：
 

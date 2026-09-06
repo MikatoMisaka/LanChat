@@ -28,6 +28,8 @@ class RemoteMessage {
   final Event? event;
 
   bool get isImage => type == 'image';
+
+  bool get isFile => type == 'file';
 }
 
 class RemoteMessageAdapter {
@@ -40,19 +42,26 @@ class RemoteMessageAdapter {
     if (msgType is! String || body is! String) return null;
     final isImage = msgType == MessageTypes.Image;
     final isText = msgType == MessageTypes.Text;
-    if (!isText && !isImage) return null;
+    final isFile = msgType == MessageTypes.File;
+    if (!isText && !isImage && !isFile) return null;
     final size = event.infoMap['size'];
     return RemoteMessage(
       id: event.eventId,
       roomId: event.room.id,
       senderId: event.senderId,
-      type: isImage ? 'image' : 'text',
+      type: isImage
+          ? 'image'
+          : isFile
+          ? 'file'
+          : 'text',
       body: body,
       timestamp: event.originServerTs,
       isMine: ownUserId != null && event.senderId == ownUserId,
-      fileName: isImage ? body : null,
+      fileName: isImage || isFile ? body : null,
       fileSize: size is int ? size : null,
-      attachmentMxc: isImage ? event.attachmentMxcUrl?.toString() : null,
+      attachmentMxc: isImage || isFile
+          ? event.attachmentMxcUrl?.toString()
+          : null,
       event: event,
     );
   }
@@ -95,6 +104,28 @@ class RemoteMessageAdapter {
       fileName: body,
       fileSize: fileSize,
       attachmentMxc: attachmentMxc,
+      timestamp: timestamp,
+      isMine: isMine,
+    );
+  }
+
+  static RemoteMessage file({
+    required String id,
+    required String roomId,
+    required String senderId,
+    required String body,
+    required int fileSize,
+    required DateTime timestamp,
+    required bool isMine,
+  }) {
+    return RemoteMessage(
+      id: id,
+      roomId: roomId,
+      senderId: senderId,
+      type: 'file',
+      body: body,
+      fileName: body,
+      fileSize: fileSize,
       timestamp: timestamp,
       isMine: isMine,
     );

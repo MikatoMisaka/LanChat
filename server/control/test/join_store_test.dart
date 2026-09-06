@@ -143,7 +143,8 @@ void main() {
       password: 'user-password',
       deviceId: 'LAPTOP',
     );
-    expect(revoked.status, UserLoginStatus.deviceRevoked);
+    expect(revoked.status, UserLoginStatus.devicePending);
+    expect((await store.pendingDevices()).single.deviceId, 'LAPTOP');
     await directory.delete(recursive: true);
   });
 
@@ -175,6 +176,39 @@ void main() {
       deviceId: 'PHONE',
     );
     expect(result.status, UserLoginStatus.disabled);
+    await directory.delete(recursive: true);
+  });
+
+  test('lists and revokes generated invitations', () async {
+    final directory = await Directory.systemTemp.createTemp('lanchat-join');
+    final config = ConfigStore(File('${directory.path}/config.json'));
+    await config.initialize(
+      adminPassword: 'admin-password',
+      accessCode: 'group-invite',
+    );
+    final store = JoinStore(
+      File('${directory.path}/joins.json'),
+      config: config,
+    );
+
+    final code = await store.issueInvitation(singleUse: false);
+    final invitation = (await store.invitations()).single;
+    expect(invitation.singleUse, isFalse);
+    expect(invitation.used, 0);
+
+    await store.revokeInvitation(invitation.id);
+
+    expect((await store.invitations()).single.revoked, isTrue);
+    await expectLater(
+      store.submit(
+        inviteCode: code,
+        username: 'alice',
+        password: 'user-password',
+        displayName: 'Alice',
+        deviceId: 'PHONE',
+      ),
+      throwsA(isA<JoinStoreException>()),
+    );
     await directory.delete(recursive: true);
   });
 }

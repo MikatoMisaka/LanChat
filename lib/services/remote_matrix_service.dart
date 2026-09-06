@@ -14,6 +14,7 @@ import 'package:sqflite/sqflite.dart' as sqflite;
 
 import 'remote_message_adapter.dart';
 import 'notification_service.dart';
+import 'server_api_service.dart';
 import 'server_profile.dart';
 
 class RemoteServerException implements Exception {
@@ -30,12 +31,14 @@ class RemoteServerCapabilities {
     required this.serverName,
     required this.encryptionMode,
     required this.maxImageBytes,
+    required this.maxFileBytes,
     required this.retentionDays,
   });
 
   final String serverName;
   final String encryptionMode;
   final int maxImageBytes;
+  final int maxFileBytes;
   final int retentionDays;
 
   bool get e2ee => encryptionMode == 'e2ee';
@@ -57,6 +60,12 @@ class RemoteServerCapabilities {
         1,
         RemoteServerLimits.maxImageBytes,
       ),
+      maxFileBytes: _boundedInt(
+        data['maxFileBytes'],
+        RemoteServerLimits.maxFileBytes,
+        1,
+        RemoteServerLimits.maxFileBytesLimit,
+      ),
       retentionDays: _boundedInt(data['retentionDays'], 30, 1, 365),
     );
   }
@@ -69,6 +78,8 @@ class RemoteServerCapabilities {
 
 class RemoteServerLimits {
   static const maxImageBytes = 20 * 1024 * 1024;
+  static const maxFileBytes = 100 * 1024 * 1024;
+  static const maxFileBytesLimit = 500 * 1024 * 1024;
   static const maxTextBytes = 60 * 1024;
 
   static void validateText(String text) {
@@ -82,6 +93,17 @@ class RemoteServerLimits {
       throw RemoteServerException('远程图片不能超过 20 MB。');
     }
   }
+
+  static void validateFileSize(int size, {int maxBytes = maxFileBytes}) {
+    if (maxBytes <= 0 || maxBytes > maxFileBytesLimit) {
+      throw ArgumentError.value(maxBytes, 'maxBytes');
+    }
+    if (size <= 0 || size > maxBytes) {
+      throw RemoteServerException(
+        '远程小文件不能超过 ${(maxBytes / 1024 / 1024).round()} MB。',
+      );
+    }
+  }
 }
 
 class RemoteUser {
@@ -92,6 +114,7 @@ class RemoteUser {
     this.avatarUrl,
     this.isOnline = false,
     this.lastSeen,
+    this.friendState = RemoteFriendState.none,
   });
 
   final String userId;
@@ -100,7 +123,10 @@ class RemoteUser {
   final Uri? avatarUrl;
   final bool isOnline;
   final DateTime? lastSeen;
+  final RemoteFriendState friendState;
 }
+
+enum RemoteFriendState { none, outgoingPending, incomingPending, friends }
 
 class RemoteFriendRequest {
   const RemoteFriendRequest({
@@ -123,6 +149,9 @@ class RemoteMatrixService extends ChangeNotifier {
 
   static const _clientPrefix = 'lanchat_matrix_';
   final http.Client _httpClient;
+  late final ServerApiService _serverApi = ServerApiService(
+    client: _httpClient,
+  );
   final LocalNotificationService? _notificationService;
   final _messages = StreamController<RemoteMessage>.broadcast();
   Stream<RemoteMessage> get onMessage => _messages.stream;
@@ -132,6 +161,7 @@ class RemoteMatrixService extends ChangeNotifier {
   StreamSubscription<Event>? _timelineSubscription;
   ServerProfile? _profile;
   RemoteServerCapabilities? _capabilities;
+  String? _serverSessionToken;
   bool _busy = false;
   bool _e2eeEnabled = true;
 
@@ -198,6 +228,7 @@ class RemoteMatrixService extends ChangeNotifier {
     required String password,
     String? accessCode,
     bool e2ee = true,
+    String? serverSessionToken,
     String? matrixAccessToken,
     String? matrixUserId,
     String? matrixDeviceId,
@@ -250,6 +281,7 @@ class RemoteMatrixService extends ChangeNotifier {
       _e2eeEnabled = capabilities.e2ee;
       _profile = profile;
       _capabilities = capabilities;
+      _serverSessionToken = serverSessionToken;
       _client = client;
       _timelineSubscription = client.onTimelineEvent.stream.listen(
         _onTimelineEvent,
@@ -272,13 +304,44 @@ class RemoteMatrixService extends ChangeNotifier {
     _client = null;
     _profile = null;
     _capabilities = null;
+    _serverSessionToken = null;
     if (client != null) await client.dispose();
     _database = null;
+  }
+
+  Future<void> clearProfileData(String profileId) async {
+    if (_profile?.id == profileId) await disconnect();
+    final directory = await getApplicationSupportDirectory();
+    await sqflite.deleteDatabase(
+      p.join(directory.path, '$_clientPrefix$profileId.db'),
+    );
   }
 
   Future<List<RemoteUser>> searchUsers(String query) async {
     final client = _requireClient();
     final term = query.trim();
+    final profile = _profile;
+    final sessionToken = _serverSessionToken;
+    if (profile != null && sessionToken != null && sessionToken.isNotEmpty) {
+      final directory = await _serverApi.fetchDirectory(
+        profile,
+        sessionToken: sessionToken,
+        query: term,
+      );
+      return directory
+          .where((user) => user.userId != client.userID)
+          .map(
+            (user) => RemoteUser(
+              userId: user.userId,
+              username: user.username,
+              displayName: user.displayName,
+              isOnline: user.isOnline,
+              lastSeen: user.lastSeen,
+              friendState: friendStateForUser(user.userId),
+            ),
+          )
+          .toList(growable: false);
+    }
     final response = await client.searchUserDirectory(term, limit: 100);
     final users = <RemoteUser>[];
     for (final profile in response.results) {
@@ -299,25 +362,59 @@ class RemoteMatrixService extends ChangeNotifier {
           avatarUrl: profile.avatarUrl,
           isOnline: online,
           lastSeen: lastSeen,
+          friendState: friendStateForUser(profile.userId),
         ),
       );
     }
     return users;
   }
 
+  RemoteFriendState friendStateForUser(String userId) {
+    final client = _client;
+    if (client == null) return RemoteFriendState.none;
+    final roomId = client.getDirectChatFromUserId(userId);
+    if (roomId == null) return RemoteFriendState.none;
+    final room = client.getRoomById(roomId);
+    if (room == null) return RemoteFriendState.none;
+    if (room.membership == Membership.invite) {
+      final inviter = room.getState(EventTypes.RoomMember, client.userID!);
+      return inviter?.senderId == client.userID
+          ? RemoteFriendState.outgoingPending
+          : RemoteFriendState.incomingPending;
+    }
+    if (room.membership != Membership.join) return RemoteFriendState.none;
+    final other = room
+        .getParticipants()
+        .where((user) => user.id == userId)
+        .firstOrNull;
+    return other?.membership == Membership.join
+        ? RemoteFriendState.friends
+        : RemoteFriendState.outgoingPending;
+  }
+
   Future<String> sendFriendRequest(RemoteUser user) async {
     final client = _requireClient();
+    final state = friendStateForUser(user.userId);
+    if (state == RemoteFriendState.friends) {
+      throw RemoteServerException('你们已经是好友。');
+    }
+    if (state == RemoteFriendState.outgoingPending) {
+      throw RemoteServerException('好友申请已经发送，等待对方同意。');
+    }
+    if (state == RemoteFriendState.incomingPending) {
+      throw RemoteServerException('对方已经向你发送申请，请先在好友申请中处理。');
+    }
     return client.startDirectChat(user.userId, enableEncryption: _e2eeEnabled);
   }
 
   Future<void> acceptFriendRequest(String roomId) async {
-    final room = _requireRoom(roomId);
+    final room = _requireRoom(roomId, allowInvite: true);
     await room.join();
     notifyListeners();
   }
 
   Future<void> rejectFriendRequest(String roomId) async {
-    final room = _requireRoom(roomId);
+    final room = _requireRoom(roomId, allowInvite: true);
     await room.leave();
     notifyListeners();
   }
@@ -340,9 +437,14 @@ class RemoteMatrixService extends ChangeNotifier {
 
   Future<void> sendImage(String roomId, String path) async {
     final file = File(path);
+    final serverMaxImageBytes = _capabilities?.maxImageBytes;
+    final size = await file.length();
+    RemoteServerLimits.validateImageSize(size);
+    if (serverMaxImageBytes != null && size > serverMaxImageBytes) {
+      throw RemoteServerException('当前服务器的图片上限更低。');
+    }
     final bytes = await file.readAsBytes();
     RemoteServerLimits.validateImageSize(bytes.length);
-    final serverMaxImageBytes = _capabilities?.maxImageBytes;
     if (serverMaxImageBytes != null && bytes.length > serverMaxImageBytes) {
       throw RemoteServerException('当前服务器的图片上限更低。');
     }
@@ -351,6 +453,26 @@ class RemoteMatrixService extends ChangeNotifier {
     final room = _requireRoom(roomId);
     await room.sendFileEvent(
       MatrixImageFile(bytes: bytes, name: name),
+      txid: client.generateUniqueTransactionId(),
+    );
+  }
+
+  Future<void> sendFile(String roomId, String path) async {
+    final file = File(path);
+    final serverMaxFileBytes = _capabilities?.maxFileBytes;
+    RemoteServerLimits.validateFileSize(
+      await file.length(),
+      maxBytes: serverMaxFileBytes ?? RemoteServerLimits.maxFileBytes,
+    );
+    final bytes = await file.readAsBytes();
+    RemoteServerLimits.validateFileSize(
+      bytes.length,
+      maxBytes: serverMaxFileBytes ?? RemoteServerLimits.maxFileBytes,
+    );
+    final client = _requireClient();
+    final room = _requireRoom(roomId);
+    await room.sendFileEvent(
+      MatrixFile(bytes: bytes, name: p.basename(path)),
       txid: client.generateUniqueTransactionId(),
     );
   }
@@ -384,6 +506,20 @@ class RemoteMatrixService extends ChangeNotifier {
         file.bytes.length > serverMaxImageBytes) {
       throw RemoteServerException('远程图片超过当前服务器限制。');
     }
+    return file.bytes;
+  }
+
+  Future<Uint8List> downloadFile(RemoteMessage message) async {
+    final event = message.event;
+    if (event == null || !message.isFile) {
+      throw RemoteServerException('远程文件事件不可用。');
+    }
+    final file = await event.downloadAndDecryptAttachment();
+    final serverMaxFileBytes = _capabilities?.maxFileBytes;
+    RemoteServerLimits.validateFileSize(
+      file.bytes.length,
+      maxBytes: serverMaxFileBytes ?? RemoteServerLimits.maxFileBytes,
+    );
     return file.bytes;
   }
 
@@ -454,10 +590,12 @@ class RemoteMatrixService extends ChangeNotifier {
     return client;
   }
 
-  Room _requireRoom(String roomId) {
+  Room _requireRoom(String roomId, {bool allowInvite = false}) {
     final client = _requireClient();
     final room = client.getRoomById(roomId);
-    if (room == null || room.membership != Membership.join) {
+    if (room == null ||
+        (room.membership != Membership.join &&
+            !(allowInvite && room.membership == Membership.invite))) {
       throw RemoteServerException('远程聊天不存在或尚未建立好友关系。');
     }
     final pendingMember = room

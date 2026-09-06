@@ -12,6 +12,7 @@ class ControlConfig {
     List<int>? matrixSecret,
     this.encryptionMode = 'e2ee',
     this.maxImageBytes = 20 * 1024 * 1024,
+    this.maxFileBytes = 100 * 1024 * 1024,
     this.retentionDays = 30,
     this.perUserDailyImageBytes = 512 * 1024 * 1024,
     this.globalDailyImageBytes = 5 * 1024 * 1024 * 1024,
@@ -23,6 +24,7 @@ class ControlConfig {
   final List<int> matrixSecret;
   String encryptionMode;
   int maxImageBytes;
+  int maxFileBytes;
   int retentionDays;
   int perUserDailyImageBytes;
   int globalDailyImageBytes;
@@ -36,6 +38,7 @@ class ControlConfig {
     'matrixSecret': base64UrlEncode(matrixSecret),
     'encryptionMode': encryptionMode,
     'maxImageBytes': maxImageBytes,
+    'maxFileBytes': maxFileBytes,
     'retentionDays': retentionDays,
     'perUserDailyImageBytes': perUserDailyImageBytes,
     'globalDailyImageBytes': globalDailyImageBytes,
@@ -52,6 +55,12 @@ class ControlConfig {
       20 * 1024 * 1024,
       1,
       20 * 1024 * 1024,
+    ),
+    maxFileBytes: _boundedInt(
+      json['maxFileBytes'],
+      100 * 1024 * 1024,
+      1,
+      500 * 1024 * 1024,
     ),
     retentionDays: _boundedInt(json['retentionDays'], 30, 1, 365),
     perUserDailyImageBytes: _boundedInt(
@@ -103,8 +112,8 @@ class PasswordHash {
   final List<int> digest;
 
   static Future<PasswordHash> create(String password) async {
-    if (password.length < 8) {
-      throw ArgumentError('Credential must contain at least 8 characters.');
+    if (password.length < 8 || password.length > 128) {
+      throw ArgumentError('Credential must contain 8-128 characters.');
     }
     final salt = List<int>.generate(16, (_) => Random.secure().nextInt(256));
     final digest = await _derive(password, salt);
@@ -154,7 +163,9 @@ class ConfigStore {
   final File file;
   ControlConfig? _config;
   final Map<String, int> _dailyUserImageBytes = {};
+  final Map<String, int> _dailyUserFileBytes = {};
   int _dailyImageBytes = 0;
+  int _dailyFileBytes = 0;
   String _day = _today();
   final _random = Random.secure();
 
@@ -254,6 +265,7 @@ class ConfigStore {
   Future<void> update({
     String? encryptionMode,
     int? maxImageBytes,
+    int? maxFileBytes,
     int? retentionDays,
     int? perUserDailyImageBytes,
     int? globalDailyImageBytes,
@@ -267,6 +279,9 @@ class ConfigStore {
     }
     if (maxImageBytes != null) {
       current.maxImageBytes = maxImageBytes.clamp(1, 20 * 1024 * 1024);
+    }
+    if (maxFileBytes != null) {
+      current.maxFileBytes = maxFileBytes.clamp(1, 500 * 1024 * 1024);
     }
     if (retentionDays != null) {
       current.retentionDays = retentionDays.clamp(1, 365);
@@ -302,22 +317,53 @@ class ConfigStore {
     return true;
   }
 
-  void recordMessage({required String userId, int imageBytes = 0}) {
+  bool allowFile(String userId, int bytes) {
+    _rollDay();
+    final current = _config;
+    if (current == null || bytes <= 0 || bytes > current.maxFileBytes) {
+      return false;
+    }
+    final userTotal = (_dailyUserFileBytes[userId] ?? 0) + bytes;
+    if (userTotal > current.perUserDailyImageBytes ||
+        _dailyFileBytes + bytes > current.globalDailyImageBytes) {
+      return false;
+    }
+    _dailyUserFileBytes[userId] = userTotal;
+    _dailyFileBytes += bytes;
+    return true;
+  }
+
+  void recordMessage({
+    required String userId,
+    int imageBytes = 0,
+    int fileBytes = 0,
+  }) {
     _rollDay();
     if (imageBytes > 0) {
       _dailyUserImageBytes[userId] =
           (_dailyUserImageBytes[userId] ?? 0) + imageBytes;
       _dailyImageBytes += imageBytes;
     }
+    if (fileBytes > 0) {
+      _dailyUserFileBytes[userId] =
+          (_dailyUserFileBytes[userId] ?? 0) + fileBytes;
+      _dailyFileBytes += fileBytes;
+    }
   }
 
   Map<String, dynamic> stats() {
     _rollDay();
+    final usageUsers = <String>{
+      ..._dailyUserImageBytes.keys,
+      ..._dailyUserFileBytes.keys,
+    };
     return {
       'day': _day,
       'imageBytes': _dailyImageBytes,
-      'users': _dailyUserImageBytes.length,
+      'fileBytes': _dailyFileBytes,
+      'users': usageUsers.length,
       'userImageBytes': Map<String, int>.from(_dailyUserImageBytes),
+      'userFileBytes': Map<String, int>.from(_dailyUserFileBytes),
     };
   }
 
@@ -336,7 +382,9 @@ class ConfigStore {
     if (day == _day) return;
     _day = day;
     _dailyUserImageBytes.clear();
+    _dailyUserFileBytes.clear();
     _dailyImageBytes = 0;
+    _dailyFileBytes = 0;
   }
 
   static String _today() =>

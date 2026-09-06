@@ -1,12 +1,17 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../services/remote_matrix_service.dart';
 import '../services/remote_message_adapter.dart';
+import '../widgets/sticker_picker.dart';
 
 class ServerChatPage extends StatefulWidget {
   const ServerChatPage({
@@ -31,6 +36,7 @@ class _ServerChatPageState extends State<ServerChatPage> {
   List<RemoteMessage> _messages = [];
   bool _loading = true;
   bool _sending = false;
+  bool _showSticker = false;
 
   @override
   void initState() {
@@ -61,8 +67,11 @@ class _ServerChatPageState extends State<ServerChatPage> {
         _loading = false;
       });
       _jumpBottom();
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
+    } catch (error) {
+      if (mounted) {
+        setState(() => _loading = false);
+        _toast('加载消息失败：$error');
+      }
     }
   }
 
@@ -95,18 +104,59 @@ class _ServerChatPageState extends State<ServerChatPage> {
     }
   }
 
-  Future<void> _sendImage() async {
+  Future<void> _pickImage() async {
     final result = await FilePicker.platform.pickFiles(type: FileType.image);
     final path = result?.files.single.path;
     if (path == null || _sending) return;
+    await _sendAttachment(path, image: true);
+  }
+
+  Future<void> _pickFile() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.any);
+    final path = result?.files.single.path;
+    if (path == null || _sending) return;
+    await _sendAttachment(path, image: false);
+  }
+
+  Future<void> _sendAttachment(String path, {required bool image}) async {
     setState(() => _sending = true);
     try {
-      await widget.service.sendImage(widget.roomId, path);
+      if (image) {
+        await widget.service.sendImage(widget.roomId, path);
+      } else {
+        await widget.service.sendFile(widget.roomId, path);
+      }
       await _load();
     } catch (error) {
       if (mounted) _toast('$error');
     } finally {
       if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  void _onEmoji(String emoji) {
+    final current = _controller.text;
+    _controller.text = current + emoji;
+    _controller.selection = TextSelection.fromPosition(
+      TextPosition(offset: _controller.text.length),
+    );
+  }
+
+  void _onPig(String localPath, bool isGif, String displayName) {
+    setState(() => _showSticker = false);
+    unawaited(_sendAttachment(localPath, image: true));
+  }
+
+  Future<void> _saveFile(RemoteMessage message) async {
+    try {
+      final bytes = await widget.service.downloadFile(message);
+      final name = p.basename(message.fileName ?? message.body);
+      final temporary = await getTemporaryDirectory();
+      final path = p.join(temporary.path, name);
+      await File(path).writeAsBytes(bytes, flush: true);
+      await Share.shareXFiles([XFile(path)], text: name);
+    } catch (error) {
+      if (mounted) _toast('保存文件失败：$error');
     }
   }
 
@@ -128,13 +178,30 @@ class _ServerChatPageState extends State<ServerChatPage> {
           ),
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(10, 6, 10, 8),
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   IconButton(
+                    tooltip: '表情和贴纸',
+                    onPressed: _sending
+                        ? null
+                        : () => setState(() => _showSticker = !_showSticker),
+                    icon: Icon(
+                      _showSticker
+                          ? Icons.keyboard_hide_outlined
+                          : Icons.emoji_emotions_outlined,
+                    ),
+                  ),
+                  IconButton(
                     tooltip: '发送图片',
-                    onPressed: _sending ? null : _sendImage,
+                    onPressed: _sending ? null : _pickImage,
                     icon: const Icon(Icons.image_outlined),
+                  ),
+                  IconButton(
+                    tooltip: '发送小文件（最多 100 MB）',
+                    onPressed: _sending ? null : _pickFile,
+                    icon: const Icon(Icons.attach_file),
                   ),
                   Expanded(
                     child: TextField(
@@ -154,11 +221,29 @@ class _ServerChatPageState extends State<ServerChatPage> {
                   IconButton(
                     tooltip: '发送',
                     onPressed: _sending ? null : _sendText,
-                    icon: const Icon(Icons.send),
+                    icon: _sending
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.send),
                   ),
                 ],
               ),
             ),
+          ),
+          AnimatedSize(
+            duration: MediaQuery.of(context).disableAnimations
+                ? Duration.zero
+                : const Duration(milliseconds: 180),
+            curve: Curves.easeOutCubic,
+            child: _showSticker
+                ? StickerPicker(
+                    onEmojiSelected: _onEmoji,
+                    onPigSelected: _onPig,
+                  )
+                : const SizedBox.shrink(),
           ),
         ],
       ),
@@ -166,7 +251,9 @@ class _ServerChatPageState extends State<ServerChatPage> {
   }
 
   Widget _bubble(RemoteMessage message) {
-    final alignment = message.isMine ? Alignment.centerRight : Alignment.centerLeft;
+    final alignment = message.isMine
+        ? Alignment.centerRight
+        : Alignment.centerLeft;
     final color = message.isMine
         ? Theme.of(context).colorScheme.primaryContainer
         : Theme.of(context).colorScheme.surfaceContainerHighest;
@@ -175,7 +262,7 @@ class _ServerChatPageState extends State<ServerChatPage> {
       child: Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 320),
+          constraints: const BoxConstraints(maxWidth: 340),
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: color,
@@ -183,6 +270,8 @@ class _ServerChatPageState extends State<ServerChatPage> {
           ),
           child: message.isImage
               ? _remoteImage(message)
+              : message.isFile
+              ? _remoteFile(message)
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
@@ -226,6 +315,46 @@ class _ServerChatPageState extends State<ServerChatPage> {
         );
       },
     );
+  }
+
+  Widget _remoteFile(RemoteMessage message) {
+    final size = message.fileSize;
+    final label = size == null ? '文件' : _formatBytes(size);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.insert_drive_file_outlined, size: 34),
+        const SizedBox(width: 9),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 180),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                message.fileName ?? message.body,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 3),
+              Text(label, style: Theme.of(context).textTheme.labelSmall),
+            ],
+          ),
+        ),
+        IconButton(
+          tooltip: '保存文件',
+          onPressed: () => _saveFile(message),
+          icon: const Icon(Icons.download_outlined),
+        ),
+      ],
+    );
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes >= 1024 * 1024) {
+      return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+    }
+    if (bytes >= 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '$bytes B';
   }
 
   void _toast(String message) {

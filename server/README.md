@@ -8,7 +8,7 @@
 - `synapse`：内部 Matrix/Synapse 传输层，客户端不需要理解它的账号体系。
 - `caddy`：可选的公网 HTTPS 前置。域名模式使用它，直连模式不启动它。
 
-大文件仍然只通过局域网传输。远程图片默认上限为 20 MB。消息正文在客户端加密，控制室显示的是状态、设备和容量信息。
+大文件仍然只通过局域网传输。远程图片默认上限为 20 MB，服务器小文件默认上限为 100 MB。消息正文在客户端加密，控制室显示的是状态、设备和容量信息。
 
 ## 文件说明
 
@@ -65,7 +65,7 @@ docker compose --env-file .env run --rm synapse generate
 - `public_baseurl` 使用聊天域名 HTTPS 地址。
 - 关闭公开注册。
 - 开启用户目录搜索。
-- `max_upload_size` 不超过 20 MB。
+- `max_upload_size` 为 500 MB；control 会按管理员设置的 1-500 MB 策略再次限制。
 - `retention` 和 `media_retention` 使用 30 天策略。
 - 文件保持可写，供内部 bootstrap 容器在需要时补齐 `registration_shared_secret`。
 
@@ -77,6 +77,7 @@ docker compose --env-file .env run --rm synapse generate
 docker compose --env-file .env up -d --build
 docker compose --env-file .env ps
 docker compose --env-file .env logs control synapse-bootstrap
+docker compose --env-file .env restart synapse
 ```
 
 `synapse-bootstrap` 会：
@@ -144,8 +145,11 @@ cp -a synapse/data "../lanchat-synapse-backup-$(date +%Y%m%d-%H%M%S)"
 
 ```bash
 git pull --ff-only
+cp -a Caddyfile "Caddyfile.backup.$(date +%Y%m%d-%H%M%S)"
+cp Caddyfile.example Caddyfile
 docker compose --env-file .env up -d --build
 docker compose --env-file .env ps
+docker compose --env-file .env restart synapse
 ```
 
 不要删除或覆盖：
@@ -158,6 +162,8 @@ docker compose --env-file .env ps
 - `synapse/data/`
 
 旧版 `.env` 如果包含 `SYNAPSE_ADMIN_TOKEN`，新版本不要求它。保留也不会成为新控制室的日常配置；新部署优先使用自动 bootstrap 文件。
+
+重新复制 `Caddyfile` 是因为它是部署机上的未跟踪文件，`git pull` 不会自动更新。新的配置会把 `/_matrix/*` 送入 control，control 才能执行 500 MB Synapse 硬上限和当前小文件策略。
 
 ## Docker 镜像拉取失败
 
@@ -185,3 +191,10 @@ dart test
 ```
 
 控制室不依赖外部 CDN。`control/Dockerfile` 会把 `web/` 下的 `index.html`、`styles.css` 和 `app.js` 一起复制到镜像。
+
+客户端服务器版构建请在仓库根目录执行：
+
+```powershell
+.\tooling\build-lanchat.ps1 -Edition server -Platform android
+.\tooling\build-lanchat.ps1 -Edition server -Platform windows
+```

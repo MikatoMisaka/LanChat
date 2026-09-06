@@ -10,6 +10,7 @@ class ServerProfileStore {
     : _keyStore = keyStore ?? MethodChannelIdentityKeyStore();
 
   static const _profilesKey = 'server.profiles';
+  static const _selectedProfileKey = 'server.selected-profile';
   static const _credentialPrefix = 'server.credential.';
 
   final IdentityKeyStore _keyStore;
@@ -55,9 +56,15 @@ class ServerProfileStore {
       jsonEncode(next.map((item) => item.toMap()).toList()),
     );
     await _keyStore.write(_credentialKey(profile.id, 'password'), password);
-    await _writeOrDelete(profile.id, 'access-code', accessCode);
-    await _writeOrDelete(profile.id, 'invite-code', inviteCode);
-    await _writeOrDelete(profile.id, 'session-token', sessionToken);
+    if (accessCode != null) {
+      await _writeOrDelete(profile.id, 'access-code', accessCode);
+    }
+    if (inviteCode != null) {
+      await _writeOrDelete(profile.id, 'invite-code', inviteCode);
+    }
+    if (sessionToken != null) {
+      await _writeOrDelete(profile.id, 'session-token', sessionToken);
+    }
   }
 
   Future<String?> passwordFor(String profileId) =>
@@ -71,6 +78,20 @@ class ServerProfileStore {
 
   Future<String?> sessionTokenFor(String profileId) =>
       _keyStore.read(_credentialKey(profileId, 'session-token'));
+
+  Future<String?> selectedProfileId() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_selectedProfileKey);
+  }
+
+  Future<void> setSelectedProfileId(String? profileId) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (profileId == null || profileId.isEmpty) {
+      await prefs.remove(_selectedProfileKey);
+    } else {
+      await prefs.setString(_selectedProfileKey, profileId);
+    }
+  }
 
   Future<void> remove(String profileId) async {
     final prefs = await SharedPreferences.getInstance();
@@ -88,6 +109,9 @@ class ServerProfileStore {
     await _keyStore.delete(_credentialKey(profileId, 'access-code'));
     await _keyStore.delete(_credentialKey(profileId, 'invite-code'));
     await _keyStore.delete(_credentialKey(profileId, 'session-token'));
+    if (await selectedProfileId() == profileId) {
+      await setSelectedProfileId(null);
+    }
   }
 
   Future<void> _writeOrDelete(

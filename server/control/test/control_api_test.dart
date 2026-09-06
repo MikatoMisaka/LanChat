@@ -22,6 +22,7 @@ void main() {
     final server = ControlServer(
       store: config,
       serverName: 'Example',
+      matrixServerName: 'example',
       joinStore: joinStore,
       sessionStore: sessionStore,
       matrixGateway: matrixGateway,
@@ -29,7 +30,9 @@ void main() {
 
     final info = await _send(server, 'GET', '/api/v1/server/info');
     expect(info.statusCode, 200);
-    expect((await _body(info))['setupRequired'], isTrue);
+    final infoBody = await _body(info);
+    expect(infoBody['setupRequired'], isTrue);
+    expect(infoBody['maxFileBytes'], 100 * 1024 * 1024);
 
     final setup = await _send(
       server,
@@ -48,6 +51,45 @@ void main() {
       body: {'accessCode': 'group-invite'},
     );
     expect(rotate.statusCode, 200);
+
+    final stats = await _send(
+      server,
+      'GET',
+      '/api/v1/admin/stats',
+      token: adminToken,
+    );
+    final statsBody = await _body(stats);
+    expect(statsBody['matrixBridgeConfigured'], isTrue);
+    expect(statsBody['matrixProxyConfigured'], isFalse);
+
+    final invitationResponse = await _send(
+      server,
+      'POST',
+      '/api/v1/admin/invitations',
+      token: adminToken,
+      body: {'singleUse': false, 'lifetimeDays': 30},
+    );
+    expect(invitationResponse.statusCode, 200);
+    final invitationCode = (await _body(invitationResponse))['code'] as String;
+    final invitations = await _send(
+      server,
+      'GET',
+      '/api/v1/admin/invitations',
+      token: adminToken,
+    );
+    final invitationBody = await _body(invitations);
+    expect(invitations.statusCode, 200);
+    final invitationId =
+        (invitationBody['invitations'] as List).single['id'] as String;
+    expect(invitationBody['invitations'], hasLength(1));
+    final revokeInvitation = await _send(
+      server,
+      'DELETE',
+      '/api/v1/admin/invitations/$invitationId',
+      token: adminToken,
+    );
+    expect(revokeInvitation.statusCode, 200);
+    expect(invitationCode, isNotEmpty);
 
     final join = await _send(
       server,
@@ -103,6 +145,36 @@ void main() {
       (await joinStore.devicesForUser('alice')).single.matrixDeviceId,
       'MATRIX-PHONE',
     );
+    final aliceToken = firstLoginBody['token'] as String;
+
+    final bobJoin = await _send(
+      server,
+      'POST',
+      '/api/v1/auth/join',
+      body: {
+        'inviteCode': 'group-invite',
+        'username': 'bob',
+        'password': 'user-password',
+        'displayName': 'Bob',
+        'deviceId': 'PHONE',
+      },
+    );
+    final bobRequestId = (await _body(bobJoin))['requestId'] as String;
+    await _send(
+      server,
+      'POST',
+      '/api/v1/admin/requests/$bobRequestId/approve',
+      token: adminToken,
+    );
+    final directoryResponse = await _send(
+      server,
+      'GET',
+      '/api/v1/directory/users',
+      token: aliceToken,
+    );
+    final directoryBody = await _body(directoryResponse);
+    expect(directoryResponse.statusCode, 200);
+    expect((directoryBody['users'] as List).single['username'], 'bob');
 
     final secondLogin = await _send(
       server,
@@ -201,6 +273,9 @@ class _FakeMatrixGateway implements MatrixGateway {
         userId: '@alice:example',
         deviceId: 'MATRIX-PHONE',
       );
+
+  @override
+  Future<String?> userIdForToken(String accessToken) async => '@alice:example';
 
   @override
   Future<void> revokeUserDevice(String username, String matrixDeviceId) async {

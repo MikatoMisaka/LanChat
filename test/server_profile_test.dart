@@ -92,4 +92,40 @@ void main() {
     expect(restored.pendingRequestId, 'request-1');
     expect(restored, profile);
   });
+
+  test('keeps omitted credentials when updating an existing profile', () async {
+    SharedPreferences.setMockInitialValues({});
+    final keyStore = _Store();
+    final store = ServerProfileStore(keyStore: keyStore);
+    final profile = ServerProfile(
+      id: 'family',
+      name: '家庭服务器',
+      baseUrl: 'https://chat.example.com',
+      username: 'alice',
+    );
+
+    await store.save(
+      profile,
+      password: 'old-password',
+      accessCode: 'old-access',
+      inviteCode: 'old-invite',
+      sessionToken: 'old-session',
+    );
+    await store.save(profile, password: 'new-password');
+
+    expect(await store.passwordFor('family'), 'new-password');
+    expect(await store.accessCodeFor('family'), 'old-access');
+    expect(await store.inviteCodeFor('family'), 'old-invite');
+    expect(await store.sessionTokenFor('family'), 'old-session');
+  });
+
+  test('persists the selected server and clears it when removed', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = ServerProfileStore(keyStore: _Store());
+
+    await store.setSelectedProfileId('family');
+    expect(await store.selectedProfileId(), 'family');
+    await store.remove('family');
+    expect(await store.selectedProfileId(), isNull);
+  });
 }

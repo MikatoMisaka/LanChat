@@ -84,4 +84,34 @@ void main() {
     expect(derived, isNot('user-password'));
     await directory.delete(recursive: true);
   });
+
+  test('bounds the server file size independently from image size', () async {
+    final directory = await Directory.systemTemp.createTemp('lanchat-files');
+    final store = ConfigStore(File('${directory.path}/config.json'));
+    await store.initialize(
+      adminPassword: 'admin-password',
+      accessCode: 'server-code',
+    );
+
+    expect((await store.config).maxFileBytes, 100 * 1024 * 1024);
+    await store.update(maxFileBytes: 500 * 1024 * 1024);
+    expect((await store.config).maxFileBytes, 500 * 1024 * 1024);
+    await store.update(maxFileBytes: 501 * 1024 * 1024);
+    expect((await store.config).maxFileBytes, 500 * 1024 * 1024);
+    await directory.delete(recursive: true);
+  });
+
+  test('tracks file traffic with the configured daily quotas', () async {
+    final directory = await Directory.systemTemp.createTemp('lanchat-files');
+    final store = ConfigStore(File('${directory.path}/config.json'));
+    await store.initialize(
+      adminPassword: 'admin-password',
+      accessCode: 'server-code',
+    );
+
+    expect(store.allowFile('alice', 1024), isTrue);
+    store.recordMessage(userId: 'alice', fileBytes: 1024);
+    expect(store.stats()['fileBytes'], 2048);
+    await directory.delete(recursive: true);
+  });
 }

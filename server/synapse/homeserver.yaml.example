@@ -11,7 +11,7 @@
 # user_directory:
 #   enabled: true
 #   search_all_users: true
-# max_upload_size: 20M
+# max_upload_size: 500M
 # retention:
 #   enabled: true
 #   default_policy:

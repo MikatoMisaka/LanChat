@@ -3,7 +3,7 @@
 }
 
 {$CHAT_DOMAIN} {
-    @control path /_lanchat/* /api/* /healthz
+    @control path /_lanchat/* /api/* /healthz /_matrix/*
     handle @control {
         reverse_proxy control:8080
     }

@@ -14,6 +14,27 @@ fi
 umask 077
 mkdir -p "$CONTROL_DIR"
 
+python - "$CONFIG" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+text = path.read_text(encoding='utf-8')
+replacement = 'max_upload_size: 500M'
+pattern = re.compile(r'(?m)^max_upload_size:\s*.*$')
+if pattern.search(text):
+    text = pattern.sub(replacement, text, count=1)
+else:
+    text = re.sub(
+        r'(?m)^(server_name:\s*.*)$',
+        r'\1\n\n' + replacement,
+        text,
+        count=1,
+    )
+path.write_text(text, encoding='utf-8')
+PY
+
 if ! grep -Eq '^[[:space:]]*registration_shared_secret:' "$CONFIG"; then
   secret="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
   printf '\nregistration_shared_secret: "%s"\n' "$secret" >> "$CONFIG"
@@ -28,6 +49,7 @@ login_admin() {
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 
 password_path, token_path = sys.argv[1:]
@@ -44,8 +66,13 @@ request = urllib.request.Request(
     data=payload,
     headers={'content-type': 'application/json'},
 )
-with urllib.request.urlopen(request, timeout=15) as response:
-    result = json.load(response)
+try:
+    with urllib.request.urlopen(request, timeout=15) as response:
+        result = json.load(response)
+except urllib.error.HTTPError as error:
+    if error.code in (401, 403, 404):
+        sys.exit(1)
+    raise
 token = result.get('access_token')
 if not isinstance(token, str) or not token:
     raise RuntimeError('Synapse did not return an access token.')

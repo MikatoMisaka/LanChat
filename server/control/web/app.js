@@ -9,7 +9,9 @@
     requests: [],
     users: [],
     pendingDevices: [],
+    invitations: [],
     toastTimer: null,
+    resetUser: null,
   };
 
   const $ = (id) => document.getElementById(id);
@@ -107,18 +109,20 @@
     $('refresh-button').classList.add('is-loading');
     setGlobalStatus('正在同步控制室数据…');
     try {
-      const [config, stats, requests, users, pendingDevices] = await Promise.all([
+      const [config, stats, requests, users, pendingDevices, invitations] = await Promise.all([
         api('/api/v1/admin/config'),
         api('/api/v1/admin/stats'),
         api('/api/v1/admin/requests'),
         api('/api/v1/admin/users'),
         api('/api/v1/admin/devices/pending'),
+        api('/api/v1/admin/invitations'),
       ]);
       state.config = config;
       state.stats = stats;
       state.requests = requests.requests || [];
       state.users = users.users || [];
       state.pendingDevices = pendingDevices.devices || [];
+      state.invitations = invitations.invitations || [];
       renderAll();
       $('last-sync').textContent = `已同步 ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
       setGlobalStatus('');
@@ -139,23 +143,44 @@
     $('footer-server-name').textContent = name;
     $('server-address').textContent = window.location.host || '当前控制室';
     $('hero-retention').textContent = `${state.config?.retentionDays || 30} 天`;
-    $('hero-media-limit').textContent = `${Math.round((state.config?.maxImageBytes || 0) / 1024 / 1024)} MB / 图片`;
+    $('hero-media-limit').textContent = `${Math.round((state.config?.maxImageBytes || 0) / 1024 / 1024)} MB 图片 · ${Math.round((state.config?.maxFileBytes || 0) / 1024 / 1024)} MB 文件`;
     $('security-copy').textContent = state.config?.encryptionMode === 'e2ee'
       ? '端到端加密已启用。控制室只观察连接、设备和容量，不读取聊天内容。'
       : '当前服务器允许可读消息。建议切回客户端端到端加密。';
     $('metric-pending').textContent = pending;
     $('metric-online').textContent = stats.onlineDevices || 0;
     $('metric-users').textContent = stats.userCount || 0;
-    $('metric-traffic').textContent = formatBytes(stats.imageBytes || 0);
+    $('metric-traffic').textContent = formatBytes((stats.imageBytes || 0) + (stats.fileBytes || 0));
     $('metric-day').textContent = stats.day ? `${stats.day} UTC` : 'UTC today';
+    renderRuntime(stats);
     $('queue-count').textContent = pending;
     $('nav-pending-count').textContent = pending;
     $('nav-pending-count').classList.toggle('hidden', pending === 0);
     $('today-date').textContent = formatDate(new Date(), false);
     renderRequests();
     renderPendingDevices();
+    renderInvitations();
     renderPeople();
     populateConfig();
+    $('restart-notice').classList.toggle(
+      'hidden',
+      state.config?.synapseRestartRequired !== true,
+    );
+  }
+
+  function renderRuntime(stats) {
+    const bridge = stats.matrixBridgeConfigured === true;
+    const proxy = stats.matrixProxyConfigured === true;
+    $('control-status-label').textContent = '在线';
+    $('bridge-status-label').textContent = bridge ? '已连接' : '未配置';
+    $('proxy-status-label').textContent = proxy ? '已启用' : '未配置';
+    $('control-status-dot').className = 'status-ok';
+    $('bridge-status-dot').className = bridge ? 'status-ok' : 'status-warn';
+    $('proxy-status-dot').className = proxy ? 'status-ok' : 'status-warn';
+    const seconds = Number(stats.controlUptimeSeconds) || 0;
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    $('uptime-label').textContent = `control 已运行 ${hours} 小时 ${minutes} 分钟`;
   }
 
   function renderRequests() {
@@ -178,6 +203,16 @@
       <div class="device-row"><div class="person-line"><span class="avatar">⌁</span><div><strong>${escapeHtml(device.userId)} 的新设备</strong><small>${escapeHtml(device.deviceId)} · ${escapeHtml(formatDate(device.createdAt, true))}</small></div></div><div class="row-actions"><button class="mini-button danger" data-action="revoke-device" data-user="${escapeHtml(device.userId)}" data-device="${escapeHtml(device.deviceId)}">拒绝</button><button class="mini-button confirm" data-action="approve-device" data-user="${escapeHtml(device.userId)}" data-device="${escapeHtml(device.deviceId)}">通过</button></div></div>`).join('');
   }
 
+  function renderInvitations() {
+    const target = $('invitation-list');
+    const invitations = state.invitations.filter((invitation) => !invitation.revoked);
+    if (!invitations.length) {
+      target.innerHTML = '<div class="invitation-empty">还没有可用的单人邀请码</div>';
+      return;
+    }
+    target.innerHTML = `<div class="invitation-title">已生成的邀请码</div>${invitations.map((invitation) => `<div class="invitation-row"><div><strong>${invitation.singleUse ? '单人邀请码' : '可重复邀请码'}</strong><small>${invitation.used} 次使用 · ${invitation.expiresAt ? `到期 ${escapeHtml(formatDate(invitation.expiresAt))}` : '不过期'}</small></div><button class="mini-button danger" data-action="revoke-invitation" data-id="${escapeHtml(invitation.id)}">撤销</button></div>`).join('')}`;
+  }
+
   function renderPeople() {
     const query = ($('people-search').value || '').trim().toLowerCase();
     const people = state.users.filter((user) => !query || `${user.username} ${user.displayName}`.toLowerCase().includes(query));
@@ -189,7 +224,7 @@
     $('people-list').innerHTML = people.map((user) => {
       const devices = user.devices || [];
       const chips = devices.map((device) => `<span class="device-chip ${escapeHtml(device.status)}">${device.online ? '● ' : ''}${escapeHtml(device.deviceId)}</span>`).join('');
-      return `<article class="person-card"><div class="person-card-head"><div class="person-line"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><div><h3 class="person-card-name">${escapeHtml(user.displayName)}</h3><p class="person-card-handle">@${escapeHtml(user.username)}</p></div></div><span class="presence ${user.online ? 'online' : ''}"><i></i>${user.online ? 'ONLINE' : 'OFFLINE'}</span></div><div>${chips || '<span class="device-chip">暂无设备</span>'}</div><div class="device-summary"><span>加入于 ${escapeHtml(formatDate(user.createdAt))}</span><strong>${devices.length} 台设备</strong></div><div class="user-actions"><button class="mini-button" data-action="show-devices" data-user="${escapeHtml(user.username)}">查看设备</button><button class="mini-button danger" data-action="disable-user" data-user="${escapeHtml(user.username)}" data-disabled="${user.disabled ? 'true' : 'false'}">${user.disabled ? '恢复用户' : '禁用用户'}</button></div></article>`;
+      return `<article class="person-card"><div class="person-card-head"><div class="person-line"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><div><h3 class="person-card-name">${escapeHtml(user.displayName)}</h3><p class="person-card-handle">@${escapeHtml(user.username)}</p></div></div><span class="presence ${user.online ? 'online' : ''}"><i></i>${user.online ? 'ONLINE' : 'OFFLINE'}</span></div><div>${chips || '<span class="device-chip">暂无设备</span>'}</div><div class="device-summary"><span>加入于 ${escapeHtml(formatDate(user.createdAt))}</span><strong>${devices.length} 台设备</strong></div><div class="user-actions"><button class="mini-button" data-action="show-devices" data-user="${escapeHtml(user.username)}">查看设备</button><button class="mini-button" data-action="reset-password" data-user="${escapeHtml(user.username)}">重置密码</button><button class="mini-button danger" data-action="disable-user" data-user="${escapeHtml(user.username)}" data-disabled="${user.disabled ? 'true' : 'false'}">${user.disabled ? '恢复用户' : '禁用用户'}</button></div></article>`;
     }).join('');
   }
 
@@ -197,6 +232,7 @@
     if (!state.config) return;
     $('retention-days').value = state.config.retentionDays || 30;
     $('max-image-mb').value = Math.max(1, Math.round((state.config.maxImageBytes || 20 * 1024 * 1024) / 1024 / 1024));
+    $('max-file-mb').value = Math.max(1, Math.round((state.config.maxFileBytes || 100 * 1024 * 1024) / 1024 / 1024));
     $('user-quota-gb').value = ((state.config.perUserDailyImageBytes || 512 * 1024 * 1024) / 1024 / 1024 / 1024).toFixed(1);
     $('global-quota-gb').value = ((state.config.globalDailyImageBytes || 5 * 1024 * 1024 * 1024) / 1024 / 1024 / 1024).toFixed(1);
   }
@@ -253,6 +289,7 @@
         encryptionMode: 'e2ee',
         retentionDays: Number($('retention-days').value),
         maxImageBytes: Number($('max-image-mb').value) * 1024 * 1024,
+        maxFileBytes: Number($('max-file-mb').value) * 1024 * 1024,
         perUserDailyImageBytes: Number($('user-quota-gb').value) * 1024 * 1024 * 1024,
         globalDailyImageBytes: Number($('global-quota-gb').value) * 1024 * 1024 * 1024,
       }) });
@@ -290,6 +327,15 @@
     } catch (error) { showToast(error.message, true); }
   }
 
+  async function revokeInvitation(id) {
+    if (!window.confirm('撤销后，这个邀请码立即失效。继续吗？')) return;
+    try {
+      await api(`/api/v1/admin/invitations/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      showToast('邀请码已撤销。');
+      await refresh();
+    } catch (error) { showToast(error.message, true); }
+  }
+
   async function toggleUser(user, disabled) {
     const action = disabled ? '恢复' : '禁用';
     if (!window.confirm(`${action} ${user}？${disabled ? '' : '该用户的现有会话会立即失效。'}`)) return;
@@ -306,6 +352,31 @@
       $('dialog-user-name').textContent = `@${username}`;
       $('dialog-devices').innerHTML = (result.devices || []).map((device) => `<div class="dialog-device"><div><strong>${escapeHtml(device.deviceId)}</strong><small>${escapeHtml(device.status)} · ${device.online ? '最近在线' : '未在线'}</small></div><button class="mini-button danger" data-action="revoke-device" data-user="${escapeHtml(username)}" data-device="${escapeHtml(device.deviceId)}">撤销</button></div>`).join('') || '<div class="empty-state"><strong>还没有设备</strong></div>';
       $('device-dialog').showModal();
+    } catch (error) { showToast(error.message, true); }
+  }
+
+  function showResetPassword(username) {
+    state.resetUser = username;
+    $('password-user-name').textContent = `@${username}`;
+    $('reset-password-form').reset();
+    $('password-dialog').showModal();
+  }
+
+  async function handleResetPassword(event) {
+    event.preventDefault();
+    if ($('reset-password').value !== $('reset-password-confirm').value) {
+      showToast('两次输入的密码不一致。', true);
+      return;
+    }
+    if (!state.resetUser) return;
+    try {
+      await api(`/api/v1/admin/users/${encodeURIComponent(state.resetUser)}/password`, {
+        method: 'POST',
+        body: JSON.stringify({ password: $('reset-password').value }),
+      });
+      $('password-dialog').close();
+      showToast('密码已更新，旧会话已注销。');
+      await refresh();
     } catch (error) { showToast(error.message, true); }
   }
 
@@ -330,11 +401,14 @@
     if (action === 'reject-request') reviewRequest(actionButton.dataset.id, false);
     if (action === 'approve-device') reviewDevice(actionButton.dataset.user, actionButton.dataset.device, true);
     if (action === 'revoke-device') reviewDevice(actionButton.dataset.user, actionButton.dataset.device, false);
+    if (action === 'revoke-invitation') revokeInvitation(actionButton.dataset.id);
     if (action === 'disable-user') toggleUser(actionButton.dataset.user, actionButton.dataset.disabled === 'true');
     if (action === 'show-devices') showDevices(actionButton.dataset.user);
+    if (action === 'reset-password') showResetPassword(actionButton.dataset.user);
     if (action === 'copy-code') copyText($('last-code-value').textContent);
     if (action === 'copy-group-code') copyText($('last-group-code-value').textContent);
     if (action === 'close-dialog') $('device-dialog').close();
+    if (action === 'close-password-dialog') $('password-dialog').close();
   }
 
   function logout() {
@@ -348,6 +422,7 @@
     $('invite-form').addEventListener('submit', handleInvite);
     $('config-form').addEventListener('submit', handleConfig);
     $('admin-password-form').addEventListener('submit', handlePassword);
+    $('reset-password-form').addEventListener('submit', handleResetPassword);
     $('rotate-group-invite').addEventListener('click', rotateGroupInvite);
     $('refresh-button').addEventListener('click', refresh);
     $('people-refresh').addEventListener('click', refresh);

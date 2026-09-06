@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lanchat/services/remote_matrix_service.dart';
+import 'package:lanchat/services/remote_message_adapter.dart';
 
 void main() {
   test('remote server limits allow text and images within the contract', () {
@@ -31,6 +32,7 @@ void main() {
       'encryptionMode': 'readable',
       'maxImageBytes': 1024,
       'retentionDays': 7,
+      'maxFileBytes': 100 * 1024 * 1024,
     });
 
     expect(capabilities.serverName, 'Home');
@@ -38,6 +40,7 @@ void main() {
     expect(capabilities.e2ee, isFalse);
     expect(capabilities.maxImageBytes, 1024);
     expect(capabilities.retentionDays, 7);
+    expect(capabilities.maxFileBytes, 100 * 1024 * 1024);
   });
 
   test('remote server capabilities default to safe bounded values', () {
@@ -46,5 +49,40 @@ void main() {
     expect(capabilities.e2ee, isTrue);
     expect(capabilities.maxImageBytes, RemoteServerLimits.maxImageBytes);
     expect(capabilities.retentionDays, 30);
+    expect(capabilities.maxFileBytes, RemoteServerLimits.maxFileBytes);
+  });
+
+  test('remote limits accept small files and reject oversized files', () {
+    expect(
+      () => RemoteServerLimits.validateFileSize(100 * 1024 * 1024),
+      returnsNormally,
+    );
+    expect(
+      () => RemoteServerLimits.validateFileSize(100 * 1024 * 1024 + 1),
+      throwsA(isA<RemoteServerException>()),
+    );
+    expect(
+      () => RemoteServerLimits.validateFileSize(
+        500 * 1024 * 1024,
+        maxBytes: RemoteServerLimits.maxFileBytesLimit,
+      ),
+      returnsNormally,
+    );
+  });
+
+  test('remote file messages expose attachment metadata', () {
+    final message = RemoteMessageAdapter.file(
+      id: 'event-1',
+      roomId: '!room:example',
+      senderId: '@alice:example',
+      body: 'notes.pdf',
+      fileSize: 1024,
+      timestamp: DateTime(2026),
+      isMine: true,
+    );
+
+    expect(message.isFile, isTrue);
+    expect(message.fileName, 'notes.pdf');
+    expect(message.fileSize, 1024);
   });
 }
