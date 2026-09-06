@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart' as sqflite;
 
 import 'remote_message_adapter.dart';
+import 'remote_attachment_cache.dart';
 import 'notification_service.dart';
 import 'server_api_service.dart';
 import 'server_profile.dart';
@@ -83,6 +84,9 @@ class RemoteServerLimits {
   static const maxTextBytes = 60 * 1024;
 
   static void validateText(String text) {
+    if (text.trim().isEmpty) {
+      throw RemoteServerException('远程文字不能为空。');
+    }
     if (utf8.encode(text).length > maxTextBytes) {
       throw RemoteServerException('远程文字不能超过 60 KB。');
     }
@@ -144,8 +148,10 @@ class RemoteMatrixService extends ChangeNotifier {
   RemoteMatrixService({
     http.Client? httpClient,
     LocalNotificationService? notificationService,
+    RemoteAttachmentCache? attachmentCache,
   }) : _httpClient = httpClient ?? http.Client(),
-       _notificationService = notificationService;
+       _notificationService = notificationService,
+       _attachmentCache = attachmentCache ?? RemoteAttachmentCache();
 
   static const _clientPrefix = 'lanchat_matrix_';
   final http.Client _httpClient;
@@ -153,6 +159,7 @@ class RemoteMatrixService extends ChangeNotifier {
     client: _httpClient,
   );
   final LocalNotificationService? _notificationService;
+  final RemoteAttachmentCache _attachmentCache;
   final _messages = StreamController<RemoteMessage>.broadcast();
   Stream<RemoteMessage> get onMessage => _messages.stream;
 
@@ -171,6 +178,15 @@ class RemoteMatrixService extends ChangeNotifier {
   bool get isBusy => _busy;
   bool get e2eeEnabled => _e2eeEnabled;
   RemoteServerCapabilities? get capabilities => _capabilities;
+
+  static bool canUseRoom({
+    required Membership membership,
+    required bool allowInvite,
+    required bool hasPendingMember,
+  }) {
+    if (allowInvite && membership == Membership.invite) return true;
+    return membership == Membership.join && !hasPendingMember;
+  }
 
   List<Room> get rooms => List.unmodifiable(
     _client?.rooms
@@ -394,6 +410,9 @@ class RemoteMatrixService extends ChangeNotifier {
 
   Future<String> sendFriendRequest(RemoteUser user) async {
     final client = _requireClient();
+    if (!ServerApiService.isCompleteMatrixUserId(user.userId)) {
+      throw RemoteServerException('服务器返回的用户 ID 无效。');
+    }
     final state = friendStateForUser(user.userId);
     if (state == RemoteFriendState.friends) {
       throw RemoteServerException('你们已经是好友。');
@@ -404,7 +423,12 @@ class RemoteMatrixService extends ChangeNotifier {
     if (state == RemoteFriendState.incomingPending) {
       throw RemoteServerException('对方已经向你发送申请，请先在好友申请中处理。');
     }
-    return client.startDirectChat(user.userId, enableEncryption: _e2eeEnabled);
+    final roomId = await client.startDirectChat(
+      user.userId,
+      enableEncryption: _e2eeEnabled,
+    );
+    notifyListeners();
+    return roomId;
   }
 
   Future<void> acceptFriendRequest(String roomId) async {
@@ -483,18 +507,28 @@ class RemoteMatrixService extends ChangeNotifier {
   }) async {
     final client = _requireClient();
     final timeline = await _requireRoom(roomId).getTimeline(limit: limit);
-    return timeline.events
-        .map(
-          (event) =>
-              RemoteMessageAdapter.fromEvent(event, ownUserId: client.userID),
-        )
-        .whereType<RemoteMessage>()
-        .toList()
-        .reversed
-        .toList();
+    final messages = mergeRemoteMessages(
+      timeline.events
+          .map(
+            (event) =>
+                RemoteMessageAdapter.fromEvent(event, ownUserId: client.userID),
+          )
+          .whereType<RemoteMessage>()
+          .toList()
+          .reversed,
+    );
+    return messages;
   }
 
   Future<Uint8List> downloadImage(RemoteMessage message) async {
+    return _attachmentCache.loadImage(
+      message,
+      () => _downloadImage(message),
+      scope: _profile?.baseUrl ?? '',
+    );
+  }
+
+  Future<Uint8List> _downloadImage(RemoteMessage message) async {
     final event = message.event;
     if (event == null || !message.isImage) {
       throw RemoteServerException('远程图片事件不可用。');
@@ -570,6 +604,15 @@ class RemoteMatrixService extends ChangeNotifier {
       ownUserId: _client?.userID,
     );
     if (message == null || message.isMine) return;
+    if (message.isImage) {
+      unawaited(
+        _attachmentCache.autoReceiveImage(
+          message,
+          () => _downloadImage(message),
+          scope: _profile?.baseUrl ?? '',
+        ),
+      );
+    }
     _messages.add(message);
     final notifications = _notificationService;
     if (notifications != null) {
@@ -593,9 +636,7 @@ class RemoteMatrixService extends ChangeNotifier {
   Room _requireRoom(String roomId, {bool allowInvite = false}) {
     final client = _requireClient();
     final room = client.getRoomById(roomId);
-    if (room == null ||
-        (room.membership != Membership.join &&
-            !(allowInvite && room.membership == Membership.invite))) {
+    if (room == null) {
       throw RemoteServerException('远程聊天不存在或尚未建立好友关系。');
     }
     final pendingMember = room
@@ -603,7 +644,11 @@ class RemoteMatrixService extends ChangeNotifier {
         .where((user) => user.id != client.userID)
         .where((user) => user.membership != Membership.join)
         .firstOrNull;
-    if (pendingMember != null) {
+    if (!canUseRoom(
+      membership: room.membership,
+      allowInvite: allowInvite,
+      hasPendingMember: pendingMember != null,
+    )) {
       throw RemoteServerException('对方尚未接受好友申请。');
     }
     return room;

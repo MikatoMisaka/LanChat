@@ -125,8 +125,12 @@ class ServerDirectoryUser {
         value['displayName'] is! String) {
       throw const FormatException('Invalid directory user.');
     }
+    final userId = value['userId'] as String;
+    if (!ServerApiService.isCompleteMatrixUserId(userId)) {
+      throw const FormatException('Invalid Matrix user id.');
+    }
     return ServerDirectoryUser(
-      userId: value['userId'] as String,
+      userId: userId,
       username: value['username'] as String,
       displayName: value['displayName'] as String,
       isOnline: value['isOnline'] == true,
@@ -196,6 +200,9 @@ class ServerLoginResult {
 }
 
 class ServerApiService {
+  static bool isCompleteMatrixUserId(String value) =>
+      RegExp(r'^@[^\s:]+:[^\s]+$').hasMatch(value);
+
   ServerApiService({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
@@ -386,17 +393,21 @@ class ServerApiService {
     }
   }
 
-  String _messageForError(Object? error) => switch (error) {
-    'invalid_credentials' => '用户名或密码不正确。',
-    'user_disabled' => '这个账号已被管理员禁用。',
-    'device_revoked' => '这台设备已被管理员撤销。',
-    'chat_backend_unavailable' => '服务器聊天引擎暂时不可用。',
-    'upload_too_large' => '文件超过服务器允许的大小。',
-    'daily_attachment_quota_exceeded' => '今天的附件流量额度已用完。',
-    'file_quota_exceeded' => '今天的附件流量额度已用完。',
-    'admin_setup_required' => '服务器尚未完成首次设置。',
-    _ => '服务器请求失败。',
-  };
+  String _messageForError(Object? error) {
+    final raw = error is String ? error.trim() : '';
+    return switch (raw) {
+      'invalid_credentials' => '用户名或密码不正确。',
+      'user_disabled' => '这个账号已被管理员禁用。',
+      'device_revoked' => '这台设备已被管理员撤销。',
+      'chat_backend_unavailable' => '服务器聊天引擎暂时不可用。',
+      'upload_too_large' => '文件超过服务器允许的大小。',
+      'daily_attachment_quota_exceeded' => '今天的附件流量额度已用完。',
+      'file_quota_exceeded' => '今天的附件流量额度已用完。',
+      'admin_setup_required' => '服务器尚未完成首次设置。',
+      _ when raw.isNotEmpty => raw,
+      _ => '服务器请求失败。',
+    };
+  }
 }
 
 class _ApiResponse {

@@ -7,12 +7,12 @@ import '../services/app_state.dart';
 import '../services/notification_service.dart';
 import '../services/notification_service_factory.dart';
 import '../services/remote_matrix_service.dart';
-import '../services/remote_message_adapter.dart';
 import '../services/server_api_service.dart';
 import '../services/server_profile.dart';
 import '../services/server_profile_store.dart';
 import '../widgets/chat_theme.dart';
 import '../widgets/server_profile_editor.dart';
+import '../widgets/server_profile_selector.dart';
 import 'server_chat_page.dart';
 
 class ServerPage extends StatefulWidget {
@@ -31,8 +31,8 @@ class _ServerPageState extends State<ServerPage> {
   final _searchController = TextEditingController();
   final _statusByProfile = <String, ServerProbeResult>{};
   final _checkingProfiles = <String>{};
-  StreamSubscription<RemoteMessage>? _messageSubscription;
   Timer? _statusTimer;
+  Timer? _directoryTimer;
   List<ServerProfile> _profiles = [];
   List<RemoteUser> _users = [];
   ServerProfile? _selected;
@@ -54,12 +54,14 @@ class _ServerPageState extends State<ServerPage> {
     }
     _service = RemoteMatrixService(notificationService: _notificationService);
     _api = ServerApiService();
-    _messageSubscription = _service.onMessage.listen((_) {
-      if (mounted) setState(() {});
+    _service.addListener(_onServiceChanged);
+    _statusTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      unawaited(_refreshAllStatuses());
+      unawaited(_refreshConnectedDirectory());
     });
-    _statusTimer = Timer.periodic(
-      const Duration(seconds: 30),
-      (_) => unawaited(_refreshAllStatuses()),
+    _directoryTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => unawaited(_refreshConnectedDirectory()),
     );
     unawaited(_restore());
   }
@@ -67,7 +69,8 @@ class _ServerPageState extends State<ServerPage> {
   @override
   void dispose() {
     _statusTimer?.cancel();
-    _messageSubscription?.cancel();
+    _directoryTimer?.cancel();
+    _service.removeListener(_onServiceChanged);
     _searchController.dispose();
     _service.dispose();
     if (_ownsNotificationService) {
@@ -92,8 +95,9 @@ class _ServerPageState extends State<ServerPage> {
       unawaited(_probeProfile(selected));
       final password = await _profilesStore.passwordFor(selected.id);
       final accessCode = await _profilesStore.accessCodeFor(selected.id);
+      final inviteCode = await _profilesStore.inviteCodeFor(selected.id);
       if (!mounted || password == null) return;
-      await _connectStored(selected, password, accessCode);
+      await _connectStored(selected, password, accessCode, inviteCode);
     } else {
       unawaited(_refreshAllStatuses());
     }
@@ -128,6 +132,15 @@ class _ServerPageState extends State<ServerPage> {
     }
   }
 
+  void _onServiceChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _refreshConnectedDirectory() async {
+    if (!_service.isConnected || _searching) return;
+    await _searchUsers();
+  }
+
   Future<void> _probeProfile(ServerProfile profile) async {
     if (_checkingProfiles.contains(profile.id)) return;
     if (mounted) setState(() => _checkingProfiles.add(profile.id));
@@ -154,11 +167,12 @@ class _ServerPageState extends State<ServerPage> {
     await _probeProfile(profile);
     final password = await _profilesStore.passwordFor(profile.id);
     final accessCode = await _profilesStore.accessCodeFor(profile.id);
+    final inviteCode = await _profilesStore.inviteCodeFor(profile.id);
     if (!mounted || password == null) {
       if (mounted) setState(() => _error = '这个服务器缺少登录信息，请编辑服务器配置。');
       return;
     }
-    await _connectStored(profile, password, accessCode);
+    await _connectStored(profile, password, accessCode, inviteCode);
   }
 
   Future<void> _connect(
@@ -241,6 +255,7 @@ class _ServerPageState extends State<ServerPage> {
     ServerProfile profile,
     String password,
     String? accessCode,
+    String? inviteCode,
   ) async {
     if (accessCode != null && accessCode.isNotEmpty) {
       await _connect(profile, password, accessCode);
@@ -281,7 +296,53 @@ class _ServerPageState extends State<ServerPage> {
         return;
       }
     }
+    if (inviteCode != null && inviteCode.isNotEmpty) {
+      await _submitJoinRequest(profile, password, inviteCode);
+      return;
+    }
     await _connectAccount(profile, password);
+  }
+
+  Future<void> _submitJoinRequest(
+    ServerProfile profile,
+    String password,
+    String inviteCode,
+  ) async {
+    try {
+      final join = await _api.submitJoin(
+        profile,
+        inviteCode: inviteCode,
+        username: profile.username,
+        password: password,
+        displayName: profile.displayName.isEmpty
+            ? profile.username
+            : profile.displayName,
+        deviceId: _deviceId(profile),
+      );
+      final pendingProfile = ServerProfile(
+        id: profile.id,
+        name: profile.name,
+        baseUrl: profile.baseUrl,
+        username: profile.username,
+        displayName: profile.displayName,
+        pendingRequestId: join.requestId,
+      );
+      await _profilesStore.save(
+        pendingProfile,
+        password: password,
+        inviteCode: inviteCode,
+        accessCode: '',
+        sessionToken: '',
+      );
+      await _replaceProfile(pendingProfile);
+      if (mounted) {
+        setState(() => _error = '申请已提交，等待管理员审批。');
+      }
+    } on ServerApiException catch (error) {
+      if (mounted) setState(() => _error = error.message);
+    } catch (error) {
+      if (mounted) setState(() => _error = '$error');
+    }
   }
 
   String _deviceId(ServerProfile profile) {
@@ -337,6 +398,7 @@ class _ServerPageState extends State<ServerPage> {
         name: name,
         baseUrl: normalizedUrl,
         username: draft.username,
+        displayName: draft.displayName,
         pendingRequestId: connectionChanged ? null : existing?.pendingRequestId,
       );
       final probe = await _api.probe(profile);
@@ -369,35 +431,7 @@ class _ServerPageState extends State<ServerPage> {
       );
       await _replaceProfile(profile);
       if (draft.isJoining) {
-        final join = await _api.submitJoin(
-          profile,
-          inviteCode: draft.inviteCode,
-          username: draft.username,
-          password: password,
-          displayName: draft.displayName,
-          deviceId: _deviceId(profile),
-        );
-        final pendingProfile = ServerProfile(
-          id: profile.id,
-          name: profile.name,
-          baseUrl: profile.baseUrl,
-          username: profile.username,
-          pendingRequestId: join.requestId,
-        );
-        await _profilesStore.save(
-          pendingProfile,
-          password: password,
-          inviteCode: draft.inviteCode,
-          accessCode: '',
-          sessionToken: '',
-        );
-        await _replaceProfile(pendingProfile);
-        if (mounted) {
-          setState(() {
-            _selected = pendingProfile;
-            _error = '申请已提交，等待管理员审批。';
-          });
-        }
+        await _submitJoinRequest(profile, password, draft.inviteCode);
       } else if (draft.accessCode.isNotEmpty) {
         await _connect(profile, password, draft.accessCode);
       } else {
@@ -465,7 +499,10 @@ class _ServerPageState extends State<ServerPage> {
       await _profilesStore.setSelectedProfileId(next.id);
       final password = await _profilesStore.passwordFor(next.id);
       final accessCode = await _profilesStore.accessCodeFor(next.id);
-      if (password != null) await _connectStored(next, password, accessCode);
+      final inviteCode = await _profilesStore.inviteCodeFor(next.id);
+      if (password != null) {
+        await _connectStored(next, password, accessCode, inviteCode);
+      }
     }
   }
 
@@ -474,11 +511,12 @@ class _ServerPageState extends State<ServerPage> {
     if (profile == null) return;
     final password = await _profilesStore.passwordFor(profile.id);
     final accessCode = await _profilesStore.accessCodeFor(profile.id);
+    final inviteCode = await _profilesStore.inviteCodeFor(profile.id);
     if (password == null) {
       if (mounted) setState(() => _error = '这个服务器缺少登录信息，请编辑服务器配置。');
       return;
     }
-    await _connectStored(profile, password, accessCode);
+    await _connectStored(profile, password, accessCode, inviteCode);
   }
 
   Future<void> _disconnect() async {
@@ -628,7 +666,12 @@ class _ServerPageState extends State<ServerPage> {
           }
           return Column(
             children: [
-              SizedBox(height: 300, child: _serverListPane(compact: true)),
+              ServerProfileSelector(
+                profiles: _profiles,
+                selected: _selected,
+                onSelected: (profile) => unawaited(_selectProfile(profile)),
+                onAdd: _openEditor,
+              ),
               Expanded(child: _serverDetailPane()),
             ],
           );
@@ -637,9 +680,9 @@ class _ServerPageState extends State<ServerPage> {
     );
   }
 
-  Widget _serverListPane({bool compact = false}) {
+  Widget _serverListPane() {
     return Card(
-      margin: EdgeInsets.fromLTRB(compact ? 12 : 16, 16, compact ? 12 : 8, 8),
+      margin: const EdgeInsets.fromLTRB(16, 16, 8, 8),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 16, 12, 12),
         child: Column(

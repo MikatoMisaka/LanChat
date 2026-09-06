@@ -15,6 +15,7 @@ umask 077
 mkdir -p "$CONTROL_DIR"
 
 python - "$CONFIG" <<'PY'
+import os
 import pathlib
 import re
 import sys
@@ -31,6 +32,56 @@ else:
         r'\1\n\n' + replacement,
         text,
         count=1,
+    )
+
+def set_scalar(source, key, value):
+    expression = re.compile(rf'(?m)^{re.escape(key)}:\s*.*$')
+    line = f'{key}: {value}'
+    if expression.search(source):
+        return expression.sub(line, source, count=1)
+    return source.rstrip() + f'\n{line}\n'
+
+def set_nested_scalar(source, section, key, value):
+    section_match = re.search(
+        rf'(?m)^{re.escape(section)}:\s*$\n',
+        source,
+    )
+    if section_match is None:
+        return source.rstrip() + f'\n{section}:\n  {key}: {value}\n'
+    start = section_match.end()
+    next_section = re.search(r'(?m)^[^ \t#][^:\n]*:\s*.*$', source[start:])
+    end = start + next_section.start() if next_section else len(source)
+    block = source[start:end]
+    key_match = re.search(rf'(?m)^  {re.escape(key)}:\s*.*$', block)
+    if key_match:
+        block = block[:key_match.start()] + f'  {key}: {value}' + block[key_match.end():]
+    else:
+        block = f'  {key}: {value}\n' + block
+    return source[:start] + block + source[end:]
+
+public_baseurl = os.environ.get('LANCHAT_PUBLIC_BASEURL', '').strip()
+if not public_baseurl:
+    chat_domain = os.environ.get('CHAT_DOMAIN', '').strip()
+    if chat_domain:
+        public_baseurl = f'https://{chat_domain}/'
+if public_baseurl:
+    text = set_scalar(text, 'public_baseurl', repr(public_baseurl))
+text = set_scalar(text, 'enable_registration', 'false')
+text = set_nested_scalar(text, 'user_directory', 'enabled', 'true')
+text = set_nested_scalar(text, 'user_directory', 'search_all_users', 'true')
+if not re.search(r'(?m)^retention:\s*$', text):
+    text += (
+        '\nretention:\n'
+        '  enabled: true\n'
+        '  default_policy:\n'
+        '    min_lifetime: 1d\n'
+        '    max_lifetime: 30d\n'
+    )
+if not re.search(r'(?m)^media_retention:\s*$', text):
+    text += (
+        '\nmedia_retention:\n'
+        '  local_media_lifetime: 30d\n'
+        '  remote_media_lifetime: 30d\n'
     )
 path.write_text(text, encoding='utf-8')
 PY

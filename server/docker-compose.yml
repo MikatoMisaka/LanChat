@@ -45,6 +45,10 @@ services:
     restart: "no"
     user: "0:0"
     entrypoint: ["/bin/sh", "/bootstrap.sh"]
+    environment:
+      SYNAPSE_SERVER_NAME: ${SYNAPSE_SERVER_NAME}
+      CHAT_DOMAIN: ${CHAT_DOMAIN:-}
+      LANCHAT_PUBLIC_BASEURL: ${LANCHAT_PUBLIC_BASEURL:-}
     volumes:
       - ./synapse/data:/data
       - ./data/control:/control

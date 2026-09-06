@@ -67,7 +67,9 @@ class _ServerProfileEditorState extends State<ServerProfileEditor> {
   );
 
   late bool _isJoining =
-      widget.profile == null || widget.profile?.pendingRequestId != null;
+      widget.profile == null ||
+      widget.profile?.pendingRequestId != null ||
+      widget.inviteCode?.isNotEmpty == true;
   Map<ServerFormField, String> _errors = {};
 
   bool get _editing => widget.profile != null;
@@ -124,15 +126,15 @@ class _ServerProfileEditorState extends State<ServerProfileEditor> {
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
-    final maxHeight = (MediaQuery.sizeOf(context).height - 48)
-        .clamp(320.0, 760.0)
+    final maxHeight = (MediaQuery.sizeOf(context).height - bottomInset - 48)
+        .clamp(1.0, 760.0)
         .toDouble();
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: 560, maxHeight: maxHeight),
         child: Padding(
-          padding: EdgeInsets.fromLTRB(26, 24, 26, 20 + bottomInset),
+          padding: const EdgeInsets.fromLTRB(26, 24, 26, 20),
           child: SingleChildScrollView(
             child: Form(
               child: Column(

@@ -33,6 +33,7 @@ class _ServerChatPageState extends State<ServerChatPage> {
   final _controller = TextEditingController();
   final _scroll = ScrollController();
   StreamSubscription<RemoteMessage>? _messageSubscription;
+  final _imageLoads = <String, Future<Uint8List>>{};
   List<RemoteMessage> _messages = [];
   bool _loading = true;
   bool _sending = false;
@@ -44,7 +45,9 @@ class _ServerChatPageState extends State<ServerChatPage> {
     unawaited(_load());
     _messageSubscription = widget.service.onMessage.listen((message) {
       if (message.roomId == widget.roomId && mounted) {
-        setState(() => _messages = [..._messages, message]);
+        setState(
+          () => _messages = mergeRemoteMessages([..._messages, message]),
+        );
         _jumpBottom();
       }
     });
@@ -63,7 +66,7 @@ class _ServerChatPageState extends State<ServerChatPage> {
       final messages = await widget.service.messagesForRoom(widget.roomId);
       if (!mounted) return;
       setState(() {
-        _messages = messages;
+        _messages = mergeRemoteMessages([...messages, ..._messages]);
         _loading = false;
       });
       _jumpBottom();
@@ -92,10 +95,10 @@ class _ServerChatPageState extends State<ServerChatPage> {
   Future<void> _sendText() async {
     final text = _controller.text.trim();
     if (text.isEmpty || _sending) return;
-    _controller.clear();
     setState(() => _sending = true);
     try {
       await widget.service.sendText(widget.roomId, text);
+      if (mounted) _controller.clear();
       await _load();
     } catch (error) {
       if (mounted) _toast('$error');
@@ -152,7 +155,8 @@ class _ServerChatPageState extends State<ServerChatPage> {
       final bytes = await widget.service.downloadFile(message);
       final name = p.basename(message.fileName ?? message.body);
       final temporary = await getTemporaryDirectory();
-      final path = p.join(temporary.path, name);
+      final eventKey = message.id.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+      final path = p.join(temporary.path, '$eventKey-$name');
       await File(path).writeAsBytes(bytes, flush: true);
       await Share.shareXFiles([XFile(path)], text: name);
     } catch (error) {
@@ -199,7 +203,8 @@ class _ServerChatPageState extends State<ServerChatPage> {
                     icon: const Icon(Icons.image_outlined),
                   ),
                   IconButton(
-                    tooltip: '发送小文件（最多 100 MB）',
+                    tooltip:
+                        '发送小文件（最多 ${_formatBytes(widget.service.capabilities?.maxFileBytes ?? RemoteServerLimits.maxFileBytes)}）',
                     onPressed: _sending ? null : _pickFile,
                     icon: const Icon(Icons.attach_file),
                   ),
@@ -293,14 +298,18 @@ class _ServerChatPageState extends State<ServerChatPage> {
 
   Widget _remoteImage(RemoteMessage message) {
     return FutureBuilder<Uint8List>(
-      future: widget.service.downloadImage(message),
+      future: _imageFuture(message),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           if (snapshot.hasError) {
-            return const SizedBox(
+            return SizedBox(
               width: 180,
               height: 120,
-              child: Icon(Icons.broken_image_outlined),
+              child: IconButton(
+                tooltip: '重新加载图片',
+                onPressed: () => setState(() {}),
+                icon: const Icon(Icons.refresh),
+              ),
             );
           }
           return const SizedBox(
@@ -315,6 +324,17 @@ class _ServerChatPageState extends State<ServerChatPage> {
         );
       },
     );
+  }
+
+  Future<Uint8List> _imageFuture(RemoteMessage message) {
+    return _imageLoads.putIfAbsent(message.id, () async {
+      try {
+        return await widget.service.downloadImage(message);
+      } catch (_) {
+        _imageLoads.remove(message.id);
+        rethrow;
+      }
+    });
   }
 
   Widget _remoteFile(RemoteMessage message) {

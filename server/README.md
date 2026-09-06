@@ -28,6 +28,37 @@ server/
 └── .env.example              环境变量示例
 ```
 
+## 一键启动
+
+Linux Docker 用户只需要从 Git 获取项目、配置 `.env`，然后执行启动脚本：
+
+```bash
+cd server
+cp .env.example .env
+vi .env
+bash start.sh
+```
+
+脚本会自动完成：
+
+- 检查 Docker Compose。
+- 创建 Caddy、control 和 Synapse 数据目录。
+- 生成新的 Synapse 配置。
+- 自动关闭公开注册并开启用户目录搜索。
+- 自动设置 HTTPS 基础地址、500 MB 上传硬上限和 30 天媒体保留策略。
+- 构建并启动 control、Synapse、bootstrap 和 Caddy。
+- 输出聊天地址、控制室地址和首次设置口令查看命令。
+
+如果只在局域网通过 IP 和端口运行：
+
+```bash
+# 先在 .env 中设置，例如：
+# LANCHAT_PUBLIC_BASEURL=http://192.168.1.10:8080/
+bash start.sh --direct
+```
+
+首次启动后打开控制室，设置管理员密码并生成群组邀请码。脚本不会覆盖已有 `.env`、`Caddyfile` 或服务器数据。
+
 ## 域名 HTTPS 部署
 
 ### 准备目录和环境变量

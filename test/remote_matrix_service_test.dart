@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:matrix/matrix.dart';
 import 'package:lanchat/services/remote_matrix_service.dart';
 import 'package:lanchat/services/remote_message_adapter.dart';
 
@@ -22,6 +23,13 @@ void main() {
       () => RemoteServerLimits.validateImageSize(
         RemoteServerLimits.maxImageBytes + 1,
       ),
+      throwsA(isA<RemoteServerException>()),
+    );
+  });
+
+  test('remote server limits reject blank text messages', () {
+    expect(
+      () => RemoteServerLimits.validateText('   '),
       throwsA(isA<RemoteServerException>()),
     );
   });
@@ -85,4 +93,49 @@ void main() {
     expect(message.fileName, 'notes.pdf');
     expect(message.fileSize, 1024);
   });
+
+  test('remote message merging removes duplicate event ids', () {
+    final first = RemoteMessageAdapter.text(
+      id: 'event-1',
+      roomId: '!room:example',
+      senderId: '@alice:example',
+      body: 'first',
+      timestamp: DateTime(2026),
+      isMine: false,
+    );
+    final second = RemoteMessageAdapter.text(
+      id: 'event-2',
+      roomId: '!room:example',
+      senderId: '@bob:example',
+      body: 'second',
+      timestamp: DateTime(2026, 1, 1, 0, 1),
+      isMine: false,
+    );
+
+    final merged = mergeRemoteMessages([first, first, second]);
+
+    expect(merged.map((message) => message.id), ['event-1', 'event-2']);
+  });
+
+  test(
+    'invite rooms remain actionable for accepting or rejecting requests',
+    () {
+      expect(
+        RemoteMatrixService.canUseRoom(
+          membership: Membership.invite,
+          allowInvite: true,
+          hasPendingMember: true,
+        ),
+        isTrue,
+      );
+      expect(
+        RemoteMatrixService.canUseRoom(
+          membership: Membership.join,
+          allowInvite: false,
+          hasPendingMember: true,
+        ),
+        isFalse,
+      );
+    },
+  );
 }

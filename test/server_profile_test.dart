@@ -93,6 +93,21 @@ void main() {
     expect(restored, profile);
   });
 
+  test('persists the display name used for a join request', () {
+    final profile = ServerProfile(
+      id: 'family',
+      name: '家庭服务器',
+      baseUrl: 'https://chat.example.com',
+      username: 'alice',
+      displayName: 'Alice Example',
+    );
+
+    final restored = ServerProfile.fromMap(profile.toMap());
+
+    expect(restored.displayName, 'Alice Example');
+    expect(restored, profile);
+  });
+
   test('keeps omitted credentials when updating an existing profile', () async {
     SharedPreferences.setMockInitialValues({});
     final keyStore = _Store();

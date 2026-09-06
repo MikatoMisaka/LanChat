@@ -131,3 +131,11 @@ class RemoteMessageAdapter {
     );
   }
 }
+
+List<RemoteMessage> mergeRemoteMessages(Iterable<RemoteMessage> messages) {
+  final byId = <String, RemoteMessage>{};
+  for (final message in messages) {
+    byId[message.id] = message;
+  }
+  return byId.values.toList(growable: false);
+}

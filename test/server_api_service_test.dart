@@ -107,6 +107,31 @@ void main() {
     expect(login.matrixDeviceId, 'MATRIX-PHONE');
   });
 
+  test('preserves a server business error for the user', () async {
+    final service = ServerApiService(
+      client: MockClient(
+        (_) async => http.Response(
+          jsonEncode({'error': 'Invite code is invalid or expired.'}),
+          400,
+        ),
+      ),
+    );
+
+    await expectLater(
+      service.login(
+        profile,
+        username: 'alice',
+        password: 'user-password',
+        deviceId: 'PHONE',
+      ),
+      throwsA(
+        predicate<ServerApiException>(
+          (error) => error.message.contains('Invite code is invalid'),
+        ),
+      ),
+    );
+  });
+
   test(
     'loads the complete member directory with the LanChat session',
     () async {
@@ -166,5 +191,24 @@ void main() {
     final result = await service.probe(profile);
 
     expect(result.state, ServerProbeState.offline);
+  });
+
+  test('rejects a directory user without a complete Matrix user id', () {
+    expect(
+      () => ServerDirectoryUser.fromMap({
+        'userId': 'aaaa',
+        'username': 'aaaa',
+        'displayName': 'Aaaa',
+      }),
+      throwsFormatException,
+    );
+    expect(
+      ServerDirectoryUser.fromMap({
+        'userId': '@aaaa:chat.example.com',
+        'username': 'aaaa',
+        'displayName': 'Aaaa',
+      }).userId,
+      '@aaaa:chat.example.com',
+    );
   });
 }

@@ -175,6 +175,7 @@ void main() {
     final directoryBody = await _body(directoryResponse);
     expect(directoryResponse.statusCode, 200);
     expect((directoryBody['users'] as List).single['username'], 'bob');
+    expect((directoryBody['users'] as List).single['userId'], '@bob:example');
 
     final secondLogin = await _send(
       server,

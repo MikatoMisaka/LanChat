@@ -4,6 +4,7 @@ class ServerProfile {
     required this.name,
     required String baseUrl,
     required this.username,
+    this.displayName = '',
     this.enabled = true,
     this.pendingRequestId,
   }) : baseUrl = normalizeBaseUrl(baseUrl) {
@@ -26,6 +27,7 @@ class ServerProfile {
   final String name;
   final String baseUrl;
   final String username;
+  final String displayName;
   final bool enabled;
   final String? pendingRequestId;
 
@@ -55,6 +57,7 @@ class ServerProfile {
     'name': name,
     'baseUrl': baseUrl,
     'username': username,
+    if (displayName.trim().isNotEmpty) 'displayName': displayName,
     'enabled': enabled,
     if (pendingRequestId != null) 'pendingRequestId': pendingRequestId,
   };
@@ -72,6 +75,9 @@ class ServerProfile {
       name: value['name'] as String,
       baseUrl: value['baseUrl'] as String,
       username: value['username'] as String,
+      displayName: value['displayName'] is String
+          ? value['displayName'] as String
+          : '',
       enabled: value['enabled'] != false,
       pendingRequestId: value['pendingRequestId'] is String
           ? value['pendingRequestId'] as String
@@ -84,6 +90,7 @@ class ServerProfile {
     name: name,
     baseUrl: baseUrl,
     username: username,
+    displayName: displayName,
     enabled: enabled,
   );
 
@@ -94,10 +101,18 @@ class ServerProfile {
       other.name == name &&
       other.baseUrl == baseUrl &&
       other.username == username &&
+      other.displayName == displayName &&
       other.enabled == enabled &&
       other.pendingRequestId == pendingRequestId;
 
   @override
-  int get hashCode =>
-      Object.hash(id, name, baseUrl, username, enabled, pendingRequestId);
+  int get hashCode => Object.hash(
+    id,
+    name,
+    baseUrl,
+    username,
+    displayName,
+    enabled,
+    pendingRequestId,
+  );
 }
