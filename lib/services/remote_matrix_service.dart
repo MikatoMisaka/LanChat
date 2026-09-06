@@ -196,15 +196,20 @@ class RemoteMatrixService extends ChangeNotifier {
   Future<void> connect(
     ServerProfile profile, {
     required String password,
-    required String accessCode,
+    String? accessCode,
     bool e2ee = true,
+    String? matrixAccessToken,
+    String? matrixUserId,
+    String? matrixDeviceId,
   }) async {
     if (_busy) return;
     _busy = true;
     notifyListeners();
     try {
       await disconnect();
-      final capabilities = await _verifyAccessCode(profile, accessCode);
+      final capabilities = accessCode == null || accessCode.trim().isEmpty
+          ? await _fetchServerInfo(profile)
+          : await _verifyAccessCode(profile, accessCode);
       final directory = await getApplicationSupportDirectory();
       final sqlite = await sqflite.openDatabase(
         p.join(directory.path, '$_clientPrefix${profile.id}.db'),
@@ -219,7 +224,17 @@ class RemoteMatrixService extends ChangeNotifier {
         database: _database!,
         verificationMethods: const {KeyVerificationMethod.numbers},
       );
-      await client.init();
+      if (matrixAccessToken != null && matrixAccessToken.isNotEmpty) {
+        await client.init(
+          newToken: matrixAccessToken,
+          newHomeserver: profile.uri,
+          newUserID: matrixUserId,
+          newDeviceID: matrixDeviceId,
+          newDeviceName: 'LanChat',
+        );
+      } else {
+        await client.init();
+      }
       if (!client.isLogged()) {
         await client.checkHomeserver(profile.uri);
         await client.login(
@@ -389,6 +404,22 @@ class RemoteMatrixService extends ChangeNotifier {
         .timeout(const Duration(seconds: 10));
     if (response.statusCode != 200) {
       throw RemoteServerException('服务器接入码无效。');
+    }
+    try {
+      return RemoteServerCapabilities.fromMap(jsonDecode(response.body));
+    } catch (_) {
+      throw RemoteServerException('服务器能力信息无效。');
+    }
+  }
+
+  Future<RemoteServerCapabilities> _fetchServerInfo(
+    ServerProfile profile,
+  ) async {
+    final response = await _httpClient
+        .get(profile.uri.resolve('api/v1/server/info'))
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode != 200) {
+      throw RemoteServerException('服务器信息不可用。');
     }
     try {
       return RemoteServerCapabilities.fromMap(jsonDecode(response.body));

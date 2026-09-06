@@ -6,26 +6,34 @@ import 'package:cryptography/cryptography.dart';
 
 class ControlConfig {
   ControlConfig({
-    required this.adminPasswordHash,
-    required this.accessCodeHash,
+    this.adminPasswordHash,
+    this.accessCodeHash,
+    this.bootstrapCodeHash,
+    List<int>? matrixSecret,
     this.encryptionMode = 'e2ee',
     this.maxImageBytes = 20 * 1024 * 1024,
     this.retentionDays = 30,
     this.perUserDailyImageBytes = 512 * 1024 * 1024,
     this.globalDailyImageBytes = 5 * 1024 * 1024 * 1024,
-  });
+  }) : matrixSecret = matrixSecret ?? _newMatrixSecret();
 
-  PasswordHash adminPasswordHash;
-  PasswordHash accessCodeHash;
+  PasswordHash? adminPasswordHash;
+  PasswordHash? accessCodeHash;
+  PasswordHash? bootstrapCodeHash;
+  final List<int> matrixSecret;
   String encryptionMode;
   int maxImageBytes;
   int retentionDays;
   int perUserDailyImageBytes;
   int globalDailyImageBytes;
 
+  bool get setupRequired => adminPasswordHash == null;
+
   Map<String, dynamic> toJson() => {
-    'adminPasswordHash': adminPasswordHash.toJson(),
-    'accessCodeHash': accessCodeHash.toJson(),
+    'adminPasswordHash': adminPasswordHash?.toJson(),
+    'accessCodeHash': accessCodeHash?.toJson(),
+    'bootstrapCodeHash': bootstrapCodeHash?.toJson(),
+    'matrixSecret': base64UrlEncode(matrixSecret),
     'encryptionMode': encryptionMode,
     'maxImageBytes': maxImageBytes,
     'retentionDays': retentionDays,
@@ -34,12 +42,10 @@ class ControlConfig {
   };
 
   static ControlConfig fromJson(Map<String, dynamic> json) => ControlConfig(
-    adminPasswordHash: PasswordHash.fromJson(
-      Map<String, dynamic>.from(json['adminPasswordHash'] as Map),
-    ),
-    accessCodeHash: PasswordHash.fromJson(
-      Map<String, dynamic>.from(json['accessCodeHash'] as Map),
-    ),
+    adminPasswordHash: _optionalHash(json['adminPasswordHash']),
+    accessCodeHash: _optionalHash(json['accessCodeHash']),
+    bootstrapCodeHash: _optionalHash(json['bootstrapCodeHash']),
+    matrixSecret: _optionalSecret(json['matrixSecret']),
     encryptionMode: json['encryptionMode'] == 'readable' ? 'readable' : 'e2ee',
     maxImageBytes: _boundedInt(
       json['maxImageBytes'],
@@ -66,6 +72,28 @@ class ControlConfig {
     if (value is! int) return fallback;
     return value.clamp(min, max);
   }
+
+  static PasswordHash? _optionalHash(Object? value) {
+    if (value is! Map) return null;
+    try {
+      return PasswordHash.fromJson(Map<String, dynamic>.from(value));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static List<int>? _optionalSecret(Object? value) {
+    if (value is! String) return null;
+    try {
+      final secret = base64Url.decode(base64Url.normalize(value));
+      return secret.length == 32 ? secret : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static List<int> _newMatrixSecret() =>
+      List<int>.generate(32, (_) => Random.secure().nextInt(256));
 }
 
 class PasswordHash {
@@ -128,35 +156,90 @@ class ConfigStore {
   final Map<String, int> _dailyUserImageBytes = {};
   int _dailyImageBytes = 0;
   String _day = _today();
+  final _random = Random.secure();
 
-  Future<void> initialize({
-    required String adminPassword,
-    required String accessCode,
+  Future<String?> initialize({
+    String? adminPassword,
+    String? accessCode,
+    String? bootstrapCode,
   }) async {
     if (await file.exists()) {
       await load();
-      return;
+      return null;
     }
+
+    final hasAdminPassword = adminPassword != null && adminPassword.isNotEmpty;
+    final hasAccessCode = accessCode != null && accessCode.isNotEmpty;
+    final generatedBootstrap = hasAdminPassword
+        ? null
+        : bootstrapCode ?? _newCode();
     _config = ControlConfig(
-      adminPasswordHash: await PasswordHash.create(adminPassword),
-      accessCodeHash: await PasswordHash.create(accessCode),
+      adminPasswordHash: hasAdminPassword
+          ? await PasswordHash.create(adminPassword)
+          : null,
+      accessCodeHash: hasAccessCode
+          ? await PasswordHash.create(accessCode)
+          : null,
+      bootstrapCodeHash: generatedBootstrap == null
+          ? null
+          : await PasswordHash.create(generatedBootstrap),
     );
     await save();
+    return generatedBootstrap;
   }
 
   Future<ControlConfig> load() async {
     final decoded = jsonDecode(await file.readAsString());
     if (decoded is! Map) throw const FormatException('Invalid control config.');
-    return _config = ControlConfig.fromJson(Map<String, dynamic>.from(decoded));
+    final map = Map<String, dynamic>.from(decoded);
+    final config = ControlConfig.fromJson(map);
+    _config = config;
+    if (ControlConfig._optionalSecret(map['matrixSecret']) == null) {
+      await save();
+    }
+    return config;
   }
 
   Future<ControlConfig> get config async => _config ?? load();
 
   Future<bool> verifyAdminPassword(String password) async =>
-      (await config).adminPasswordHash.verify(password);
+      await (await config).adminPasswordHash?.verify(password) ?? false;
 
   Future<bool> verifyAccessCode(String accessCode) async =>
-      (await config).accessCodeHash.verify(accessCode);
+      await (await config).accessCodeHash?.verify(accessCode) ?? false;
+
+  Future<bool> verifyBootstrapCode(String code) async =>
+      await (await config).bootstrapCodeHash?.verify(code) ?? false;
+
+  Future<bool> get setupRequired async => (await config).setupRequired;
+
+  Future<String> matrixPasswordFor(PasswordHash passwordHash) async {
+    final current = await config;
+    final material = <int>[
+      ...current.matrixSecret,
+      ...passwordHash.salt,
+      ...passwordHash.digest,
+    ];
+    final digest = await Sha256().hash(material);
+    return 'lchat-${base64UrlEncode(digest.bytes).replaceAll('=', '')}';
+  }
+
+  Future<void> completeSetup({
+    required String bootstrapCode,
+    required String adminPassword,
+  }) async {
+    final current = await config;
+    if (current.adminPasswordHash != null ||
+        current.bootstrapCodeHash == null) {
+      throw StateError('Administrator setup has already been completed.');
+    }
+    if (!await current.bootstrapCodeHash!.verify(bootstrapCode)) {
+      throw ArgumentError('Invalid bootstrap code.');
+    }
+    current.adminPasswordHash = await PasswordHash.create(adminPassword);
+    current.bootstrapCodeHash = null;
+    await save();
+  }
 
   Future<void> rotateAccessCode(String accessCode) async {
     (await config).accessCodeHash = await PasswordHash.create(accessCode);
@@ -177,7 +260,7 @@ class ConfigStore {
   }) async {
     final current = await config;
     if (encryptionMode != null) {
-      if (encryptionMode != 'e2ee' && encryptionMode != 'readable') {
+      if (encryptionMode != 'e2ee') {
         throw ArgumentError.value(encryptionMode, 'encryptionMode');
       }
       current.encryptionMode = encryptionMode;
@@ -258,4 +341,8 @@ class ConfigStore {
 
   static String _today() =>
       DateTime.now().toUtc().toIso8601String().substring(0, 10);
+
+  String _newCode() =>
+      base64UrlEncode(List<int>.generate(18, (_) => _random.nextInt(256)))
+          .replaceAll('=', '');
 }

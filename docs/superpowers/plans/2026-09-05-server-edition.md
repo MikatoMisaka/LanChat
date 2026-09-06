@@ -1,6 +1,6 @@
-# LanChat Server Edition 实现计划
+# LanChat Server Edition 实现计划（旧版）
 
-> **面向 AI 代理的工作者：** 使用已批准的 server-edition 设计逐任务实现。任务顺序固定，每完成一组都运行测试；不要复制 Synapse/Matrix 源码。
+> **说明：** 此计划已被 `docs/superpowers/plans/2026-09-06-lightweight-server.md` 取代。不要按本文件继续实现旧的 FCM、直接 Matrix 客户端和复杂管理员配置流程。
 
 **目标：** 为现有 Flutter 客户端增加 Matrix/Synapse 自建服务器版，并提供可复现的 Docker 部署和管理员控制台。
 

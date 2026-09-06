@@ -7,7 +7,7 @@ import 'server_profile.dart';
 
 class ServerProfileStore {
   ServerProfileStore({IdentityKeyStore? keyStore})
-      : _keyStore = keyStore ?? MethodChannelIdentityKeyStore();
+    : _keyStore = keyStore ?? MethodChannelIdentityKeyStore();
 
   static const _profilesKey = 'server.profiles';
   static const _credentialPrefix = 'server.credential.';
@@ -40,23 +40,24 @@ class ServerProfileStore {
   Future<void> save(
     ServerProfile profile, {
     required String password,
-    required String accessCode,
+    String? accessCode,
+    String? inviteCode,
+    String? sessionToken,
   }) async {
-    if (password.isEmpty || accessCode.isEmpty) {
-      throw ArgumentError('Server credentials cannot be empty.');
+    if (password.isEmpty) {
+      throw ArgumentError('Server password cannot be empty.');
     }
     final prefs = await SharedPreferences.getInstance();
     final profiles = await load();
-    final next = [
-      profile,
-      ...profiles.where((item) => item.id != profile.id),
-    ];
+    final next = [profile, ...profiles.where((item) => item.id != profile.id)];
     await prefs.setString(
       _profilesKey,
       jsonEncode(next.map((item) => item.toMap()).toList()),
     );
     await _keyStore.write(_credentialKey(profile.id, 'password'), password);
-    await _keyStore.write(_credentialKey(profile.id, 'access-code'), accessCode);
+    await _writeOrDelete(profile.id, 'access-code', accessCode);
+    await _writeOrDelete(profile.id, 'invite-code', inviteCode);
+    await _writeOrDelete(profile.id, 'session-token', sessionToken);
   }
 
   Future<String?> passwordFor(String profileId) =>
@@ -64,6 +65,12 @@ class ServerProfileStore {
 
   Future<String?> accessCodeFor(String profileId) =>
       _keyStore.read(_credentialKey(profileId, 'access-code'));
+
+  Future<String?> inviteCodeFor(String profileId) =>
+      _keyStore.read(_credentialKey(profileId, 'invite-code'));
+
+  Future<String?> sessionTokenFor(String profileId) =>
+      _keyStore.read(_credentialKey(profileId, 'session-token'));
 
   Future<void> remove(String profileId) async {
     final prefs = await SharedPreferences.getInstance();
@@ -79,6 +86,21 @@ class ServerProfileStore {
     );
     await _keyStore.delete(_credentialKey(profileId, 'password'));
     await _keyStore.delete(_credentialKey(profileId, 'access-code'));
+    await _keyStore.delete(_credentialKey(profileId, 'invite-code'));
+    await _keyStore.delete(_credentialKey(profileId, 'session-token'));
+  }
+
+  Future<void> _writeOrDelete(
+    String profileId,
+    String kind,
+    String? value,
+  ) async {
+    final key = _credentialKey(profileId, kind);
+    if (value == null || value.isEmpty) {
+      await _keyStore.delete(key);
+    } else {
+      await _keyStore.write(key, value);
+    }
   }
 
   String _credentialKey(String profileId, String kind) {

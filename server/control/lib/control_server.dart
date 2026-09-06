@@ -1,5 +1,3 @@
-// ignore_for_file: prefer_initializing_formals
-
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -11,21 +9,82 @@ import 'package:shelf/shelf_io.dart' as shelf_io;
 import 'package:shelf_router/shelf_router.dart';
 
 import 'config_store.dart';
+import 'join_store.dart';
+import 'session_store.dart';
+
+class MatrixLogin {
+  const MatrixLogin({
+    required this.accessToken,
+    required this.userId,
+    required this.deviceId,
+  });
+
+  final String accessToken;
+  final String userId;
+  final String deviceId;
+}
+
+abstract interface class MatrixGateway {
+  Future<void> createUser(String username, String password, String displayName);
+
+  Future<MatrixLogin> loginUser(String username, String password);
+
+  Future<void> revokeUserDevice(String username, String matrixDeviceId);
+
+  Future<void> updatePassword(String username, String password);
+
+  Future<void> setUserDisabled({
+    required String username,
+    required bool disabled,
+    required String matrixPassword,
+    required String displayName,
+  });
+}
+
+class MatrixGatewayException implements Exception {
+  MatrixGatewayException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
 
 class ControlServer {
   ControlServer({
     required this.store,
     required this.serverName,
-    this.synapseUrl,
-    this.synapseAdminToken,
-    Directory? webDirectory,
-  }) : _webDirectory = webDirectory;
+    JoinStore? joinStore,
+    SessionStore? sessionStore,
+    this.matrixGateway,
+    this.matrixProxyUrl,
+    http.Client? proxyClient,
+    this.webDirectory,
+  }) : joinStore =
+           joinStore ??
+           JoinStore(
+             File(
+               '${store.file.parent.path}${Platform.pathSeparator}joins.json',
+             ),
+             config: store,
+           ),
+       sessionStore =
+           sessionStore ??
+           SessionStore(
+             File(
+               '${store.file.parent.path}${Platform.pathSeparator}sessions.json',
+             ),
+           ),
+       _proxyClient = proxyClient ?? http.Client();
 
   final ConfigStore store;
   final String serverName;
-  final String? synapseUrl;
-  final String? synapseAdminToken;
-  final Directory? _webDirectory;
+  final JoinStore joinStore;
+  final SessionStore sessionStore;
+  final MatrixGateway? matrixGateway;
+  final Uri? matrixProxyUrl;
+  final Directory? webDirectory;
+  final http.Client _proxyClient;
   final Map<String, DateTime> _adminSessions = {};
   final _random = Random.secure();
   HttpServer? _server;
@@ -33,23 +92,57 @@ class ControlServer {
   Handler get handler {
     final router = Router()
       ..get('/', _index)
+      ..get(
+        '/styles.css',
+        (request) => _asset(request, 'styles.css', 'text/css; charset=utf-8'),
+      )
+      ..get(
+        '/app.js',
+        (request) =>
+            _asset(request, 'app.js', 'text/javascript; charset=utf-8'),
+      )
       ..get('/healthz', _health)
       ..post('/_lanchat/v1/access/verify', _verifyAccess)
       ..get('/_lanchat/v1/access/authorize', _authorizeAccess)
       ..post('/api/v1/usage/message', _recordMessage)
+      ..get('/api/v1/server/info', _serverInfo)
+      ..post('/api/v1/auth/join', _submitJoin)
+      ..get('/api/v1/auth/join/<requestId>', _joinStatus)
+      ..post('/api/v1/auth/login', _userLogin)
+      ..post('/api/v1/auth/logout', _userLogout)
+      ..get('/api/v1/me', _me)
+      ..post('/api/v1/admin/setup', _adminSetup)
       ..post('/api/v1/admin/login', _adminLogin)
       ..get('/api/v1/admin/config', _adminConfig)
       ..put('/api/v1/admin/config', _updateConfig)
       ..post('/api/v1/admin/password', _changePassword)
       ..post('/api/v1/admin/access-code/rotate', _rotateAccessCode)
       ..get('/api/v1/admin/stats', _adminStats)
+      ..get('/api/v1/admin/requests', _listRequests)
+      ..post('/api/v1/admin/requests/<requestId>/approve', _approveJoin)
+      ..post('/api/v1/admin/requests/<requestId>/reject', _rejectJoin)
+      ..post('/api/v1/admin/invitations', _createInvitation)
+      ..get('/api/v1/admin/devices/pending', _pendingDevices)
       ..get('/api/v1/admin/users', _listUsers)
-      ..post('/api/v1/admin/users', _createUser)
       ..post('/api/v1/admin/users/<userId>/password', _resetUserPassword)
+      ..post('/api/v1/admin/users/<userId>/disable', _disableUser)
       ..get('/api/v1/admin/users/<userId>/devices', _listUserDevices)
-      ..delete('/api/v1/admin/users/<userId>/devices/<deviceId>', _revokeDevice)
-      ..post('/api/v1/admin/users/<userId>/deactivate', _deactivateUser);
-    return const Pipeline().addHandler(router.call);
+      ..post(
+        '/api/v1/admin/users/<userId>/devices/<deviceId>/approve',
+        _approveDevice,
+      )
+      ..delete(
+        '/api/v1/admin/users/<userId>/devices/<deviceId>',
+        _revokeDevice,
+      );
+    final routed = const Pipeline().addHandler(router.call);
+    return (request) async {
+      final response = await routed(request);
+      if (response.statusCode != 404 || matrixProxyUrl == null) {
+        return response;
+      }
+      return _proxyToMatrix(request);
+    };
   }
 
   Future<HttpServer> start({String host = '0.0.0.0', int port = 8080}) async {
@@ -60,23 +153,106 @@ class ControlServer {
   Future<void> stop() async {
     await _server?.close(force: true);
     _server = null;
+    _proxyClient.close();
+  }
+
+  Future<Response> _proxyToMatrix(Request request) async {
+    final target = matrixProxyUrl!.resolve(
+      request.url.path + (request.url.hasQuery ? '?${request.url.query}' : ''),
+    );
+    final body = BytesBuilder(copy: false);
+    await for (final chunk in request.read()) {
+      body.add(chunk);
+    }
+    final outbound = http.Request(request.method, target)
+      ..headers.addAll(_proxyHeaders(request.headers))
+      ..bodyBytes = body.takeBytes();
+    try {
+      final upstream = await _proxyClient.send(outbound);
+      final bytes = await upstream.stream.toBytes();
+      final headers = <String, String>{};
+      for (final entry in upstream.headers.entries) {
+        if (entry.key == 'content-length' ||
+            entry.key == 'transfer-encoding' ||
+            entry.key == 'connection') {
+          continue;
+        }
+        headers[entry.key] = entry.value;
+      }
+      return Response(upstream.statusCode, body: bytes, headers: headers);
+    } on http.ClientException catch (error) {
+      return _json({
+        'error': 'matrix_unavailable',
+        'detail': '$error',
+      }, status: 502);
+    } on SocketException catch (error) {
+      return _json({
+        'error': 'matrix_unavailable',
+        'detail': '$error',
+      }, status: 502);
+    }
+  }
+
+  Map<String, String> _proxyHeaders(Map<String, String> source) {
+    const skipped = {
+      'host',
+      'content-length',
+      'transfer-encoding',
+      'connection',
+    };
+    return Map.fromEntries(
+      source.entries.where((entry) => !skipped.contains(entry.key)),
+    );
   }
 
   Future<Response> _index(Request request) async {
-    final directory = _webDirectory;
+    final directory = webDirectory;
     final file = directory == null
         ? null
         : File('${directory.path}${Platform.pathSeparator}index.html');
     if (file != null && await file.exists()) {
       return Response.ok(
         await file.readAsString(),
-        headers: const {'content-type': 'text/html; charset=utf-8'},
+        headers: const {
+          'content-type': 'text/html; charset=utf-8',
+          'cache-control': 'no-cache',
+        },
       );
     }
     return _json({'name': 'LanChat Control', 'status': 'ok'});
   }
 
-  Response _health(Request request) => _json({'status': 'ok'});
+  Future<Response> _asset(
+    Request request,
+    String name,
+    String contentType,
+  ) async {
+    final directory = webDirectory;
+    final file = directory == null
+        ? null
+        : File('${directory.path}${Platform.pathSeparator}$name');
+    if (file == null || !await file.exists()) {
+      return Response.notFound('Not found.');
+    }
+    return Response.ok(
+      await file.readAsString(),
+      headers: {'content-type': contentType, 'cache-control': 'no-cache'},
+    );
+  }
+
+  Future<Response> _health(Request request) async =>
+      _json({'status': 'ok', 'setupRequired': await store.setupRequired});
+
+  Future<Response> _serverInfo(Request request) async {
+    final config = await store.config;
+    return _json({
+      'serverName': serverName,
+      'setupRequired': config.setupRequired,
+      'encryptionMode': config.encryptionMode,
+      'maxImageBytes': config.maxImageBytes,
+      'retentionDays': config.retentionDays,
+    });
+  }
 
   Future<Response> _verifyAccess(Request request) async {
     final body = await _readJson(request);
@@ -119,12 +295,156 @@ class ControlServer {
     return _json({'ok': true});
   }
 
+  Future<Response> _submitJoin(Request request) async {
+    final body = await _readJson(request);
+    try {
+      final join = await joinStore.submit(
+        inviteCode: body['inviteCode'] is String
+            ? body['inviteCode'] as String
+            : '',
+        username: body['username'] is String ? body['username'] as String : '',
+        password: body['password'] is String ? body['password'] as String : '',
+        displayName: body['displayName'] is String
+            ? body['displayName'] as String
+            : '',
+        deviceId: body['deviceId'] is String ? body['deviceId'] as String : '',
+      );
+      return _json({
+        'requestId': join.id,
+        'status': join.status.name,
+      }, status: 202);
+    } on JoinStoreException catch (error) {
+      return _json({'error': error.message}, status: 400);
+    }
+  }
+
+  Future<Response> _joinStatus(Request request, String requestId) async {
+    final join = await joinStore.requestById(Uri.decodeComponent(requestId));
+    if (join == null) {
+      return _json({'error': 'join_request_not_found'}, status: 404);
+    }
+    return _json({
+      'requestId': join.id,
+      'status': join.status.name,
+      'username': join.username,
+      'displayName': join.displayName,
+      'deviceId': join.deviceId,
+      'createdAt': join.createdAt.toUtc().toIso8601String(),
+      'reviewedAt': join.reviewedAt?.toUtc().toIso8601String(),
+    });
+  }
+
+  Future<Response> _userLogin(Request request) async {
+    final body = await _readJson(request);
+    final result = await joinStore.authenticate(
+      username: body['username'] is String ? body['username'] as String : '',
+      password: body['password'] is String ? body['password'] as String : '',
+      deviceId: body['deviceId'] is String ? body['deviceId'] as String : '',
+    );
+    final user = result.user;
+    final device = result.device;
+    switch (result.status) {
+      case UserLoginStatus.invalidCredentials:
+        return _json({'error': 'invalid_credentials'}, status: 401);
+      case UserLoginStatus.disabled:
+        return _json({'error': 'user_disabled'}, status: 403);
+      case UserLoginStatus.devicePending:
+        return _json({
+          'status': 'device_pending',
+          'user': user?.toPublicJson(),
+          'device': device?.toPublicJson(),
+        }, status: 202);
+      case UserLoginStatus.deviceRevoked:
+        return _json({'error': 'device_revoked'}, status: 403);
+      case UserLoginStatus.authenticated:
+        if (user == null || device == null) {
+          return _json({'error': 'session_unavailable'}, status: 500);
+        }
+        MatrixLogin? matrixLogin;
+        final gateway = matrixGateway;
+        if (gateway != null) {
+          try {
+            matrixLogin = await gateway.loginUser(
+              user.username,
+              await store.matrixPasswordFor(user.passwordHash),
+            );
+            await joinStore.setMatrixDeviceId(
+              userId: user.username,
+              deviceId: device.deviceId,
+              matrixDeviceId: matrixLogin.deviceId,
+            );
+          } catch (_) {
+            return _json({'error': 'chat_backend_unavailable'}, status: 503);
+          }
+        }
+        final token = await sessionStore.create(
+          userId: user.username,
+          deviceId: device.deviceId,
+        );
+        final response = <String, dynamic>{
+          'status': 'authenticated',
+          'token': token,
+          'expiresInSeconds': 30 * 24 * 60 * 60,
+          'user': user.toPublicJson(),
+          'device': device.toPublicJson(),
+        };
+        if (matrixLogin != null) {
+          response['matrixAccessToken'] = matrixLogin.accessToken;
+          response['matrixUserId'] = matrixLogin.userId;
+          response['matrixDeviceId'] = matrixLogin.deviceId;
+        }
+        return _json(response);
+    }
+  }
+
+  Future<Response> _userLogout(Request request) async {
+    final token = _bearerToken(request);
+    if (token != null) await sessionStore.revokeToken(token);
+    return Response(204);
+  }
+
+  Future<Response> _me(Request request) async {
+    final context = await _userContext(request);
+    if (context == null) return _json({'error': 'login_required'}, status: 401);
+    return _json({
+      'user': context.user.toPublicJson(),
+      'device': context.device.toPublicJson(),
+    });
+  }
+
+  Future<Response> _adminSetup(Request request) async {
+    final body = await _readJson(request);
+    final bootstrapCode = body['bootstrapCode'];
+    final password = body['password'];
+    if (bootstrapCode is! String || password is! String) {
+      return _json({'error': 'invalid_setup'}, status: 400);
+    }
+    try {
+      await store.completeSetup(
+        bootstrapCode: bootstrapCode,
+        adminPassword: password,
+      );
+      return _adminSessionResponse();
+    } on StateError catch (error) {
+      return _json({'error': '$error'}, status: 409);
+    } on ArgumentError {
+      return _json({'error': 'invalid_setup'}, status: 400);
+    }
+  }
+
   Future<Response> _adminLogin(Request request) async {
+    if (await store.setupRequired) {
+      return _json({'error': 'admin_setup_required'}, status: 428);
+    }
     final body = await _readJson(request);
     final password = body['password'];
     if (password is! String || !await store.verifyAdminPassword(password)) {
       return _json({'error': 'invalid_admin_password'}, status: 401);
     }
+    return _adminSessionResponse();
+  }
+
+  Response _adminSessionResponse() {
     final token = base64UrlEncode(
       List<int>.generate(32, (_) => _random.nextInt(256)),
     ).replaceAll('=', '');
@@ -133,10 +453,7 @@ class ControlServer {
   }
 
   Future<Response?> _requireAdmin(Request request) async {
-    final header = request.headers['authorization'];
-    final token = header != null && header.startsWith('Bearer ')
-        ? header.substring(7)
-        : null;
+    final token = _bearerToken(request);
     final expiresAt = token == null ? null : _adminSessions[token];
     if (expiresAt == null || expiresAt.isBefore(DateTime.now())) {
       if (token != null) _adminSessions.remove(token);
@@ -151,12 +468,13 @@ class ControlServer {
     final config = await store.config;
     return _json({
       'serverName': serverName,
+      'setupRequired': config.setupRequired,
       'encryptionMode': config.encryptionMode,
       'maxImageBytes': config.maxImageBytes,
       'retentionDays': config.retentionDays,
       'perUserDailyImageBytes': config.perUserDailyImageBytes,
       'globalDailyImageBytes': config.globalDailyImageBytes,
-      'synapseConfigured': synapseUrl != null && synapseAdminToken != null,
+      'groupInviteConfigured': config.accessCodeHash != null,
     });
   }
 
@@ -200,13 +518,16 @@ class ControlServer {
     final denied = await _requireAdmin(request);
     if (denied != null) return denied;
     final body = await _readJson(request);
-    final code = body['accessCode'];
-    if (code is! String) {
+    final supplied = body['accessCode'];
+    if (supplied != null && supplied is! String) {
       return _json({'error': 'invalid_access_code'}, status: 400);
     }
+    final code = supplied is String && supplied.trim().isNotEmpty
+        ? supplied.trim()
+        : _newCode();
     try {
       await store.rotateAccessCode(code);
-      return _json({'ok': true});
+      return _json({'ok': true, 'accessCode': code});
     } catch (error) {
       return _json({'error': '$error'}, status: 400);
     }
@@ -215,95 +536,236 @@ class ControlServer {
   Future<Response> _adminStats(Request request) async {
     final denied = await _requireAdmin(request);
     if (denied != null) return denied;
-    return _json(store.stats());
+    final users = await joinStore.users();
+    final requests = await joinStore.pendingRequests();
+    final devices = await joinStore.allDevices();
+    final sessions = await sessionStore.activeSessions();
+    final cutoff = DateTime.now().toUtc().subtract(const Duration(minutes: 5));
+    return _json({
+      ...store.stats(),
+      'userCount': users.length,
+      'deviceCount': devices.length,
+      'onlineDevices': sessions
+          .where((session) => session.lastSeenAt.isAfter(cutoff))
+          .length,
+      'pendingRequests': requests.length,
+      'pendingDevices': devices
+          .where((device) => device.status == DeviceStatus.pending)
+          .length,
+    });
+  }
+
+  Future<Response> _listRequests(Request request) async {
+    final denied = await _requireAdmin(request);
+    if (denied != null) return denied;
+    final requests = await joinStore.pendingRequests();
+    return _json({
+      'requests': requests.map((request) => request.toPublicJson()).toList(),
+    });
+  }
+
+  Future<Response> _approveJoin(Request request, String requestId) async {
+    final denied = await _requireAdmin(request);
+    if (denied != null) return denied;
+    try {
+      final decodedRequestId = Uri.decodeComponent(requestId);
+      final pending = await joinStore.requestById(decodedRequestId);
+      if (pending == null) {
+        return _json({'error': 'join_request_not_found'}, status: 404);
+      }
+      final gateway = matrixGateway;
+      if (gateway != null && pending.status == JoinRequestStatus.pending) {
+        await gateway.createUser(
+          pending.username,
+          await store.matrixPasswordFor(pending.passwordHash),
+          pending.displayName,
+        );
+      }
+      final user = await joinStore.approve(decodedRequestId);
+      return _json({'ok': true, 'user': user.toPublicJson()});
+    } on MatrixGatewayException catch (error) {
+      return _json({'error': error.message}, status: 502);
+    } on JoinStoreException catch (error) {
+      return _json({'error': error.message}, status: 400);
+    } catch (error) {
+      return _json({
+        'error': 'chat_backend_unavailable',
+        'detail': '$error',
+      }, status: 502);
+    }
+  }
+
+  Future<Response> _rejectJoin(Request request, String requestId) async {
+    final denied = await _requireAdmin(request);
+    if (denied != null) return denied;
+    try {
+      await joinStore.reject(Uri.decodeComponent(requestId));
+      return _json({'ok': true});
+    } on JoinStoreException catch (error) {
+      return _json({'error': error.message}, status: 400);
+    }
+  }
+
+  Future<Response> _createInvitation(Request request) async {
+    final denied = await _requireAdmin(request);
+    if (denied != null) return denied;
+    final body = await _readJson(request);
+    final singleUse = body['singleUse'] != false;
+    final rawLifetime = body['lifetimeDays'];
+    Duration? lifetime = const Duration(days: 7);
+    if (rawLifetime is int) {
+      if (rawLifetime == 0) {
+        lifetime = null;
+      } else if (rawLifetime < 1 || rawLifetime > 365) {
+        return _json({'error': 'invalid_lifetime'}, status: 400);
+      } else {
+        lifetime = Duration(days: rawLifetime);
+      }
+    }
+    try {
+      final code = await joinStore.issueInvitation(
+        singleUse: singleUse,
+        lifetime: lifetime,
+      );
+      return _json({
+        'code': code,
+        'singleUse': singleUse,
+        'lifetimeDays': rawLifetime == 0 ? null : lifetime?.inDays,
+      });
+    } on JoinStoreException catch (error) {
+      return _json({'error': error.message}, status: 400);
+    }
+  }
+
+  Future<Response> _pendingDevices(Request request) async {
+    final denied = await _requireAdmin(request);
+    if (denied != null) return denied;
+    final devices = await joinStore.pendingDevices();
+    return _json({
+      'devices': devices.map((device) => device.toPublicJson()).toList(),
+    });
   }
 
   Future<Response> _listUsers(Request request) async {
     final denied = await _requireAdmin(request);
     if (denied != null) return denied;
-    final admin = _synapseAdmin;
-    if (admin == null) return _json({'users': [], 'configured': false});
-    try {
-      return _json({'users': await admin.listUsers(), 'configured': true});
-    } catch (error) {
-      return _json({'error': '$error'}, status: 502);
+    final users = await joinStore.users();
+    final cutoff = DateTime.now().toUtc().subtract(const Duration(minutes: 5));
+    final result = <Map<String, dynamic>>[];
+    for (final user in users) {
+      final devices = await joinStore.devicesForUser(user.username);
+      final sessions = await sessionStore.sessionsForUser(user.username);
+      final onlineIds = sessions
+          .where((session) => session.lastSeenAt.isAfter(cutoff))
+          .map((session) => session.deviceId)
+          .toSet();
+      result.add({
+        ...user.toPublicJson(),
+        'online': onlineIds.isNotEmpty,
+        'devices': devices
+            .map(
+              (device) =>
+                  _deviceJson(device, onlineIds.contains(device.deviceId)),
+            )
+            .toList(),
+      });
     }
-  }
-
-  Future<Response> _createUser(Request request) async {
-    final denied = await _requireAdmin(request);
-    if (denied != null) return denied;
-    final admin = _synapseAdmin;
-    if (admin == null) {
-      return _json({'error': 'synapse_not_configured'}, status: 503);
-    }
-    final body = await _readJson(request);
-    final username = body['username'];
-    final password = body['password'];
-    final displayName = body['displayName'];
-    if (username is! String || password is! String) {
-      return _json({'error': 'invalid_user'}, status: 400);
-    }
-    try {
-      await admin.createUser(
-        username,
-        password,
-        displayName is String ? displayName : null,
-      );
-      return _json({'ok': true});
-    } catch (error) {
-      return _json({'error': '$error'}, status: 502);
-    }
-  }
-
-  Future<Response> _deactivateUser(Request request, String userId) async {
-    final denied = await _requireAdmin(request);
-    if (denied != null) return denied;
-    final admin = _synapseAdmin;
-    if (admin == null) {
-      return _json({'error': 'synapse_not_configured'}, status: 503);
-    }
-    try {
-      await admin.deactivateUser(Uri.decodeComponent(userId));
-      return _json({'ok': true});
-    } catch (error) {
-      return _json({'error': '$error'}, status: 502);
-    }
+    return _json({'users': result});
   }
 
   Future<Response> _resetUserPassword(Request request, String userId) async {
     final denied = await _requireAdmin(request);
     if (denied != null) return denied;
-    final admin = _synapseAdmin;
-    if (admin == null) {
-      return _json({'error': 'synapse_not_configured'}, status: 503);
-    }
     final body = await _readJson(request);
     final password = body['password'];
     if (password is! String) {
       return _json({'error': 'invalid_password'}, status: 400);
     }
     try {
-      await admin.resetUserPassword(Uri.decodeComponent(userId), password);
+      final decodedUserId = Uri.decodeComponent(userId);
+      await joinStore.changeUserPassword(decodedUserId, password);
+      final user = await joinStore.findUser(decodedUserId);
+      final gateway = matrixGateway;
+      if (gateway != null && user != null) {
+        await gateway.updatePassword(
+          decodedUserId,
+          await store.matrixPasswordFor(user.passwordHash),
+        );
+      }
+      await sessionStore.revokeUser(decodedUserId);
       return _json({'ok': true});
-    } catch (error) {
-      return _json({'error': '$error'}, status: 502);
+    } on JoinStoreException catch (error) {
+      return _json({'error': error.message}, status: 400);
+    }
+  }
+
+  Future<Response> _disableUser(Request request, String userId) async {
+    final denied = await _requireAdmin(request);
+    if (denied != null) return denied;
+    final body = await _readJson(request);
+    final disabled = body['disabled'] != false;
+    try {
+      final decodedUserId = Uri.decodeComponent(userId);
+      final user = await joinStore.findUser(decodedUserId);
+      if (user == null) {
+        return _json({'error': 'user_not_found'}, status: 404);
+      }
+      final gateway = matrixGateway;
+      if (gateway != null) {
+        await gateway.setUserDisabled(
+          username: decodedUserId,
+          disabled: disabled,
+          matrixPassword: await store.matrixPasswordFor(user.passwordHash),
+          displayName: user.displayName,
+        );
+      }
+      await joinStore.setUserDisabled(decodedUserId, disabled);
+      if (disabled) await sessionStore.revokeUser(decodedUserId);
+      return _json({'ok': true, 'disabled': disabled});
+    } on JoinStoreException catch (error) {
+      return _json({'error': error.message}, status: 400);
     }
   }
 
   Future<Response> _listUserDevices(Request request, String userId) async {
     final denied = await _requireAdmin(request);
     if (denied != null) return denied;
-    final admin = _synapseAdmin;
-    if (admin == null) {
-      return _json({'error': 'synapse_not_configured'}, status: 503);
+    final decodedUserId = Uri.decodeComponent(userId);
+    if (await joinStore.findUser(decodedUserId) == null) {
+      return _json({'error': 'user_not_found'}, status: 404);
     }
+    final sessions = await sessionStore.sessionsForUser(decodedUserId);
+    final cutoff = DateTime.now().toUtc().subtract(const Duration(minutes: 5));
+    final onlineIds = sessions
+        .where((session) => session.lastSeenAt.isAfter(cutoff))
+        .map((session) => session.deviceId)
+        .toSet();
+    final devices = await joinStore.devicesForUser(decodedUserId);
+    return _json({
+      'devices': devices
+          .map(
+            (device) =>
+                _deviceJson(device, onlineIds.contains(device.deviceId)),
+          )
+          .toList(),
+    });
+  }
+
+  Future<Response> _approveDevice(
+    Request request,
+    String userId,
+    String deviceId,
+  ) async {
+    final denied = await _requireAdmin(request);
+    if (denied != null) return denied;
     try {
-      return _json({
-        'devices': await admin.listDevices(Uri.decodeComponent(userId)),
-      });
-    } catch (error) {
-      return _json({'error': '$error'}, status: 502);
+      await joinStore.approveDevice(
+        userId: Uri.decodeComponent(userId),
+        deviceId: Uri.decodeComponent(deviceId),
+      );
+      return _json({'ok': true});
+    } on JoinStoreException catch (error) {
+      return _json({'error': error.message}, status: 400);
     }
   }
 
@@ -314,30 +776,60 @@ class ControlServer {
   ) async {
     final denied = await _requireAdmin(request);
     if (denied != null) return denied;
-    final admin = _synapseAdmin;
-    if (admin == null) {
-      return _json({'error': 'synapse_not_configured'}, status: 503);
-    }
+    final decodedUserId = Uri.decodeComponent(userId);
+    final decodedDeviceId = Uri.decodeComponent(deviceId);
     try {
-      await admin.revokeDevice(
-        Uri.decodeComponent(userId),
-        Uri.decodeComponent(deviceId),
+      final localDevice = (await joinStore.devicesForUser(decodedUserId))
+          .where((device) => device.deviceId == decodedDeviceId)
+          .firstOrNull;
+      if (localDevice == null) {
+        return _json({'error': 'device_not_found'}, status: 404);
+      }
+      final gateway = matrixGateway;
+      if (gateway != null && localDevice.matrixDeviceId != null) {
+        await gateway.revokeUserDevice(
+          decodedUserId,
+          localDevice.matrixDeviceId!,
+        );
+      }
+      await joinStore.revokeDevice(
+        userId: decodedUserId,
+        deviceId: decodedDeviceId,
+      );
+      await sessionStore.revokeDevice(
+        userId: decodedUserId,
+        deviceId: decodedDeviceId,
       );
       return _json({'ok': true});
-    } catch (error) {
-      return _json({'error': '$error'}, status: 502);
+    } on JoinStoreException catch (error) {
+      return _json({'error': error.message}, status: 400);
     }
   }
 
-  SynapseAdminClient? get _synapseAdmin {
-    final baseUrl = synapseUrl;
-    final token = synapseAdminToken;
-    if (baseUrl == null || token == null || token.isEmpty) return null;
-    return SynapseAdminClient(
-      baseUrl: Uri.parse(baseUrl),
-      accessToken: token,
-      serverName: serverName,
-    );
+  Future<_UserContext?> _userContext(Request request) async {
+    final token = _bearerToken(request);
+    if (token == null) return null;
+    final session = await sessionStore.lookup(token);
+    if (session == null) return null;
+    final user = await joinStore.findUser(session.userId);
+    if (user == null || user.disabled) return null;
+    final device = (await joinStore.devicesForUser(user.username))
+        .where((candidate) => candidate.deviceId == session.deviceId)
+        .firstOrNull;
+    if (device == null || device.status != DeviceStatus.approved) return null;
+    return _UserContext(user: user, device: device);
+  }
+
+  Map<String, dynamic> _deviceJson(ServerDevice device, bool online) => {
+    ...device.toPublicJson(),
+    'online': online,
+  };
+
+  String? _bearerToken(Request request) {
+    final header = request.headers['authorization'];
+    if (header == null || !header.startsWith('Bearer ')) return null;
+    final token = header.substring(7).trim();
+    return token.isEmpty ? null : token;
   }
 
   Future<Map<String, dynamic>> _readJson(Request request) async {
@@ -356,13 +848,27 @@ class ControlServer {
   Response _json(Object body, {int status = 200}) => Response(
     status,
     body: jsonEncode(body),
-    headers: const {'content-type': 'application/json; charset=utf-8'},
+    headers: const {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store',
+    },
   );
+
+  String _newCode() =>
+      base64UrlEncode(List<int>.generate(18, (_) => _random.nextInt(256)))
+          .replaceAll('=', '');
 
   int? _optionalInt(Object? value) => value is int ? value : null;
 }
 
-class SynapseAdminClient {
+class _UserContext {
+  const _UserContext({required this.user, required this.device});
+
+  final ServerUser user;
+  final ServerDevice device;
+}
+
+class SynapseAdminClient implements MatrixGateway {
   SynapseAdminClient({
     required this.baseUrl,
     required this.accessToken,
@@ -374,6 +880,37 @@ class SynapseAdminClient {
   final String accessToken;
   final String serverName;
   final http.Client _client;
+
+  @override
+  Future<MatrixLogin> loginUser(String username, String password) async {
+    final response = await _client.post(
+      baseUrl.resolve('/_matrix/client/v3/login'),
+      headers: const {'content-type': 'application/json'},
+      body: jsonEncode({
+        'type': 'm.login.password',
+        'identifier': {'type': 'm.id.user', 'user': username},
+        'password': password,
+        'initial_device_display_name': 'LanChat',
+      }),
+    );
+    if (response.statusCode != 200) {
+      throw MatrixGatewayException(
+        'Synapse user login failed: ${response.statusCode}',
+      );
+    }
+    final body = jsonDecode(response.body);
+    if (body is! Map ||
+        body['access_token'] is! String ||
+        body['user_id'] is! String ||
+        body['device_id'] is! String) {
+      throw MatrixGatewayException('Synapse returned an invalid login.');
+    }
+    return MatrixLogin(
+      accessToken: body['access_token'] as String,
+      userId: body['user_id'] as String,
+      deviceId: body['device_id'] as String,
+    );
+  }
 
   Future<List<Map<String, dynamic>>> listUsers() async {
     final response = await _client.get(
@@ -391,10 +928,11 @@ class SynapseAdminClient {
         .toList();
   }
 
+  @override
   Future<void> createUser(
     String username,
     String password,
-    String? displayName,
+    String displayName,
   ) async {
     if (!RegExp(r'^[a-z0-9._=-]{1,64}$').hasMatch(username)) {
       throw ArgumentError.value(username, 'username');
@@ -410,12 +948,36 @@ class SynapseAdminClient {
       headers: {..._headers, 'content-type': 'application/json'},
       body: jsonEncode({
         'password': password,
-        'displayname': displayName ?? username,
+        'displayname': displayName,
         'deactivated': false,
       }),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw Exception('Synapse create user: ${response.statusCode}');
+    }
+  }
+
+  @override
+  Future<void> revokeUserDevice(String username, String matrixDeviceId) async {
+    await revokeDevice('@$username:$serverName', matrixDeviceId);
+  }
+
+  @override
+  Future<void> updatePassword(String username, String password) async {
+    await resetUserPassword('@$username:$serverName', password);
+  }
+
+  @override
+  Future<void> setUserDisabled({
+    required String username,
+    required bool disabled,
+    required String matrixPassword,
+    required String displayName,
+  }) async {
+    if (disabled) {
+      await deactivateUser('@$username:$serverName');
+    } else {
+      await createUser(username, matrixPassword, displayName);
     }
   }
 

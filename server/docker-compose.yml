@@ -24,13 +24,29 @@ services:
     environment:
       LANCHAT_CONFIG_PATH: /data/lanchat-control.json
       LANCHAT_SERVER_NAME: ${LANCHAT_SERVER_NAME:-LanChat Server}
-      LANCHAT_BOOTSTRAP_ADMIN_PASSWORD: ${LANCHAT_BOOTSTRAP_ADMIN_PASSWORD}
-      LANCHAT_BOOTSTRAP_ACCESS_CODE: ${LANCHAT_BOOTSTRAP_ACCESS_CODE}
+      LANCHAT_BOOTSTRAP_ADMIN_PASSWORD: ${LANCHAT_BOOTSTRAP_ADMIN_PASSWORD:-}
+      LANCHAT_BOOTSTRAP_ACCESS_CODE: ${LANCHAT_BOOTSTRAP_ACCESS_CODE:-}
       SYNAPSE_INTERNAL_URL: http://synapse:8008
-      SYNAPSE_ADMIN_TOKEN: ${SYNAPSE_ADMIN_TOKEN:-}
+      SYNAPSE_SERVER_NAME: ${SYNAPSE_SERVER_NAME}
+      SYNAPSE_ADMIN_TOKEN_FILE: /data/matrix-admin-token
       LANCHAT_WEB_ROOT: /app/web
     volumes:
       - ./data/control:/data
+    depends_on:
+      synapse:
+        condition: service_healthy
+      synapse-bootstrap:
+        condition: service_completed_successfully
+
+  synapse-bootstrap:
+    image: ${SYNAPSE_IMAGE:-matrixdotorg/synapse:latest}
+    restart: "no"
+    user: "0:0"
+    entrypoint: ["/bin/sh", "/bootstrap.sh"]
+    volumes:
+      - ./synapse/data:/data
+      - ./data/control:/control
+      - ./synapse/bootstrap.sh:/bootstrap.sh:ro
     depends_on:
       synapse:
         condition: service_healthy

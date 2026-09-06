@@ -65,4 +65,23 @@ void main() {
       await directory.delete(recursive: true);
     },
   );
+
+  test('derives a stable private bridge password from a user hash', () async {
+    final directory = await Directory.systemTemp.createTemp('lanchat-bridge');
+    final file = File('${directory.path}/config.json');
+    final first = ConfigStore(file);
+    await first.initialize(
+      adminPassword: 'admin-password',
+      accessCode: 'server-code',
+    );
+    final hash = await PasswordHash.create('user-password');
+
+    final derived = await first.matrixPasswordFor(hash);
+    final restored = ConfigStore(file);
+    await restored.load();
+
+    expect(await restored.matrixPasswordFor(hash), derived);
+    expect(derived, isNot('user-password'));
+    await directory.delete(recursive: true);
+  });
 }

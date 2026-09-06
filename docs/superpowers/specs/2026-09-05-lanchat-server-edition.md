@@ -1,7 +1,7 @@
 # LanChat Server Edition Design
 
 日期：2026-09-05
-状态：已批准执行
+状态：已被 `2026-09-06-lightweight-server-design.md` 取代
 
 ## 目标
 

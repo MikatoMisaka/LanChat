@@ -8,16 +8,38 @@ Future<void> main() async {
     Platform.environment['LANCHAT_CONFIG_PATH'] ?? '/data/lanchat-control.json',
   );
   final store = ConfigStore(configFile);
-  await store.initialize(
-    adminPassword:
-        Platform.environment['LANCHAT_BOOTSTRAP_ADMIN_PASSWORD'] ?? '',
-    accessCode: Platform.environment['LANCHAT_BOOTSTRAP_ACCESS_CODE'] ?? '',
+  final bootstrapCode = await store.initialize(
+    adminPassword: _optionalEnvironment('LANCHAT_BOOTSTRAP_ADMIN_PASSWORD'),
+    accessCode: _optionalEnvironment('LANCHAT_BOOTSTRAP_ACCESS_CODE'),
   );
+  if (bootstrapCode != null) {
+    stdout.writeln('LanChat first-run setup code: $bootstrapCode');
+    stdout.writeln(
+      'Open the control room and set an administrator password. '
+      'This code is shown only once.',
+    );
+  }
+  final serverName =
+      Platform.environment['LANCHAT_SERVER_NAME'] ?? 'LanChat Server';
+  final matrixServerName =
+      _optionalEnvironment('SYNAPSE_SERVER_NAME') ?? serverName;
+  final synapseUrl = _optionalEnvironment('SYNAPSE_INTERNAL_URL');
+  final synapseToken =
+      _optionalEnvironment('SYNAPSE_ADMIN_TOKEN') ??
+      await _optionalFile('SYNAPSE_ADMIN_TOKEN_FILE');
+  final MatrixGateway? matrixGateway =
+      synapseUrl == null || synapseToken == null
+      ? null
+      : SynapseAdminClient(
+          baseUrl: Uri.parse(synapseUrl),
+          accessToken: synapseToken,
+          serverName: matrixServerName,
+        );
   final server = ControlServer(
     store: store,
-    serverName: Platform.environment['LANCHAT_SERVER_NAME'] ?? 'LanChat Server',
-    synapseUrl: _optionalEnvironment('SYNAPSE_INTERNAL_URL'),
-    synapseAdminToken: _optionalEnvironment('SYNAPSE_ADMIN_TOKEN'),
+    serverName: serverName,
+    matrixGateway: matrixGateway,
+    matrixProxyUrl: synapseUrl == null ? null : Uri.parse(synapseUrl),
     webDirectory: Directory(
       Platform.environment['LANCHAT_WEB_ROOT'] ?? '/app/web',
     ),
@@ -37,4 +59,13 @@ String? _optionalEnvironment(String name) {
   final value = Platform.environment[name];
   if (value == null || value.trim().isEmpty) return null;
   return value.trim();
+}
+
+Future<String?> _optionalFile(String environmentName) async {
+  final path = _optionalEnvironment(environmentName);
+  if (path == null) return null;
+  final file = File(path);
+  if (!await file.exists()) return null;
+  final value = (await file.readAsString()).trim();
+  return value.isEmpty ? null : value;
 }

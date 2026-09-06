@@ -44,6 +44,38 @@ void main() {
       'https://chat.example.com/_synapse/admin/v2/users/%40alice%3Achat.example.com/devices/PHONE',
     );
   });
+
+  test(
+    'logs in a provisioned internal user without using the admin token',
+    () async {
+      final client = RecordingHttpClient(
+        responseBody: jsonEncode({
+          'access_token': 'matrix-user-token',
+          'user_id': '@alice:chat.example.com',
+          'device_id': 'MATRIX-PHONE',
+        }),
+      );
+      final admin = SynapseAdminClient(
+        baseUrl: Uri.parse('https://chat.example.com'),
+        accessToken: 'synapse-admin-token',
+        serverName: 'chat.example.com',
+        client: client,
+      );
+
+      final login = await admin.loginUser('alice', 'internal-password');
+
+      expect(login.accessToken, 'matrix-user-token');
+      expect(login.userId, '@alice:chat.example.com');
+      expect(login.deviceId, 'MATRIX-PHONE');
+      expect(client.method, 'POST');
+      expect(
+        client.url.toString(),
+        'https://chat.example.com/_matrix/client/v3/login',
+      );
+      expect(client.headers['authorization'], isNull);
+      expect(jsonDecode(client.body)['identifier']['user'], 'alice');
+    },
+  );
 }
 
 class RecordingHttpClient extends http.BaseClient {

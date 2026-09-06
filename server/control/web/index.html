@@ -2,198 +2,183 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>LanChat 管理控制台</title>
-  <style>
-    :root { color-scheme: light; font-family: system-ui, sans-serif; }
-    body { margin: 0; background: #f4f7f2; color: #193027; }
-    main { max-width: 900px; margin: 0 auto; padding: 32px 18px 60px; }
-    h1 { margin: 0 0 24px; font-size: 28px; }
-    section { background: #fff; border: 1px solid #dce7df; border-radius: 16px; padding: 20px; margin: 16px 0; box-shadow: 0 5px 18px #163b2b0d; }
-    label { display: block; font-size: 13px; font-weight: 700; margin: 12px 0 5px; }
-    input { width: 100%; box-sizing: border-box; border: 1px solid #b8cbbd; border-radius: 10px; padding: 10px 12px; font: inherit; }
-    button { border: 0; border-radius: 10px; padding: 10px 14px; background: #226b4b; color: white; font: inherit; cursor: pointer; margin-top: 14px; }
-    button.secondary { background: #e2eee6; color: #193027; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap: 12px; }
-    .stat { background: #f1f7f2; border-radius: 12px; padding: 14px; }
-    .stat strong { display: block; font-size: 22px; margin-top: 4px; }
-    pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #f4f7f2; border-radius: 10px; padding: 12px; }
-    #app { display: none; }
-    #status { min-height: 1.3em; color: #8c3e2d; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#173b31">
+  <title>LanChat 控制室</title>
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-<main>
-  <h1>LanChat 管理控制台</h1>
-  <p id="status"></p>
-  <section id="login">
-    <h2>管理员登录</h2>
-    <form id="login-form">
-      <label for="password">管理员密码</label>
-      <input id="password" type="password" autocomplete="current-password" required>
-      <button>登录</button>
-    </form>
-  </section>
-  <div id="app">
-    <section>
-      <h2>服务器状态</h2>
-      <div class="grid">
-        <div class="stat">服务器<strong id="server-name">-</strong></div>
-        <div class="stat">今日图片流量<strong id="image-bytes">-</strong></div>
-        <div class="stat">登记用户设备<strong id="device-count">-</strong></div>
+  <div class="page-wash" aria-hidden="true"></div>
+
+  <section id="auth-screen" class="auth-shell">
+    <div class="auth-atmosphere">
+      <div class="brand-lockup">
+        <span class="brand-mark">L</span>
+        <span>
+          <strong>LanChat</strong>
+          <small>CONTROL ROOM</small>
+        </span>
       </div>
-    </section>
-    <section>
-      <h2>服务器限制</h2>
-      <form id="config-form">
-        <label for="encryption-mode">消息加密模式</label>
-        <select id="encryption-mode">
-          <option value="e2ee">端到端加密（推荐）</option>
-          <option value="readable">服务器可读</option>
-        </select>
-        <label for="max-image">单张图片上限（字节）</label>
-        <input id="max-image" type="number" min="1" required>
-        <label for="retention">消息保留天数</label>
-        <input id="retention" type="number" min="1" required>
-        <label for="user-quota">单用户每日图片流量（字节）</label>
-        <input id="user-quota" type="number" min="1" required>
-        <label for="global-quota">全局每日图片流量（字节）</label>
-        <input id="global-quota" type="number" min="1" required>
-        <button>保存限制</button>
-      </form>
-    </section>
-    <section>
-      <h2>用户</h2>
-      <form id="user-form" class="grid">
-        <div><label for="username">用户名</label><input id="username" required></div>
-        <div><label for="display-name">昵称</label><input id="display-name"></div>
-        <div><label for="user-password">初始密码</label><input id="user-password" type="password" required></div>
-        <button>创建用户</button>
-      </form>
-      <pre id="users">尚未加载</pre>
-      <form id="reset-user-form">
-        <label for="reset-user-id">重置密码的 Matrix 用户 ID</label>
-        <input id="reset-user-id" placeholder="@alice:example.com" required>
-        <label for="reset-user-password">新用户密码</label>
-        <input id="reset-user-password" type="password" minlength="8" required>
-        <button>重置用户密码</button>
-      </form>
-      <form id="revoke-device-form">
-        <label for="revoke-user-id">撤销设备的 Matrix 用户 ID</label>
-        <input id="revoke-user-id" placeholder="@alice:example.com" required>
-        <label for="revoke-device-id">设备 ID</label>
-        <input id="revoke-device-id" required>
-        <button>撤销设备</button>
-      </form>
-    </section>
-    <section>
-      <h2>管理员凭据</h2>
-      <form id="admin-password-form">
-        <label for="admin-password">新管理员密码</label>
-        <input id="admin-password" type="password" minlength="8" required>
-        <button>修改管理员密码</button>
-      </form>
-      <form id="access-code-form">
-        <label for="access-code">新服务器接入码</label>
-        <input id="access-code" type="password" minlength="8" required>
-        <button>轮换接入码</button>
-      </form>
-    </section>
-    <section>
-      <button id="logout" class="secondary">退出登录</button>
-    </section>
+      <div class="signal-art" aria-hidden="true">
+        <span class="signal-core"></span>
+        <span class="signal-orbit signal-orbit-one"></span>
+        <span class="signal-orbit signal-orbit-two"></span>
+        <span class="signal-orbit signal-orbit-three"></span>
+      </div>
+      <div class="auth-intro">
+        <p class="eyebrow">PRIVATE RELAY / QUIET DATA</p>
+        <h1>让熟人进入，<em>让数据安静。</em></h1>
+        <p>这里是你的私密聊天服务器控制室。只处理必要的状态、审批和容量，不读取聊天正文。</p>
+      </div>
+      <div class="auth-stamp">
+        <span class="stamp-line"></span>
+        <span>CLIENT-SIDE ENCRYPTED</span>
+      </div>
+    </div>
+
+    <div class="auth-card-wrap">
+      <div class="auth-card">
+        <div class="auth-card-head">
+          <span class="status-chip"><i></i><span id="auth-server-status">正在检查服务器</span></span>
+          <span class="mono-label">ADMIN ACCESS</span>
+        </div>
+
+        <div id="setup-panel" class="auth-panel hidden">
+          <p class="eyebrow">FIRST LIGHT</p>
+          <h2>先设置控制室密码</h2>
+          <p class="muted">首次启动口令只会出现在服务器日志中。设置完成后，它会立即失效。</p>
+          <form id="setup-form" class="form-stack">
+            <label>一次性初始化口令<input id="bootstrap-code" type="password" autocomplete="one-time-code" required></label>
+            <label>新的管理员密码<input id="setup-password" type="password" autocomplete="new-password" minlength="8" required></label>
+            <label>再次输入密码<input id="setup-password-confirm" type="password" autocomplete="new-password" minlength="8" required></label>
+            <button class="button button-primary button-wide" type="submit"><span>建立控制室</span><b>↗</b></button>
+          </form>
+        </div>
+
+        <div id="login-panel" class="auth-panel hidden">
+          <p class="eyebrow">WELCOME BACK</p>
+          <h2>进入控制室</h2>
+          <p class="muted">管理员凭据只在本次会话中使用，不会写入浏览器长期存储。</p>
+          <form id="login-form" class="form-stack">
+            <label>管理员密码<input id="admin-password-login" type="password" autocomplete="current-password" required></label>
+            <button class="button button-primary button-wide" type="submit"><span>登录控制室</span><b>↗</b></button>
+          </form>
+        </div>
+
+        <p id="auth-status" class="form-status" role="alert"></p>
+        <div class="auth-card-foot">
+          <span class="quiet-dot"></span>
+          <span>消息正文由客户端加密，服务器只保存密文。</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div id="app-shell" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <span class="brand-mark brand-mark-small">L</span>
+        <span><strong>LanChat</strong><small>CONTROL ROOM</small></span>
+      </div>
+
+      <div class="server-mini-card">
+        <span class="eyebrow">CURRENT NODE</span>
+        <strong id="sidebar-server-name">LanChat Server</strong>
+        <span class="server-live"><i></i>运行正常</span>
+      </div>
+
+      <nav class="main-nav" aria-label="主要导航">
+        <button class="nav-item active" data-view="overview"><span class="nav-icon">⌂</span><span>概览</span><span id="nav-pending-count" class="nav-count hidden">0</span></button>
+        <button class="nav-item" data-view="people"><span class="nav-icon">◎</span><span>成员与设备</span></button>
+        <button class="nav-item" data-view="settings"><span class="nav-icon">◌</span><span>服务器设置</span></button>
+      </nav>
+
+      <div class="sidebar-bottom">
+        <div class="privacy-badge"><span class="lock-glyph">◇</span><div><strong>隐私模式</strong><small>只存储加密密文</small></div></div>
+        <button id="logout-button" class="sidebar-action"><span>↩</span>退出控制室</button>
+        <small class="build-label">LANCHAT SERVER EDITION / 0.2</small>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div class="mobile-brand"><span class="brand-mark brand-mark-small">L</span><strong>LanChat</strong></div>
+        <div class="topbar-meta"><span class="topbar-label">CONTROL ROOM</span><span class="topbar-divider"></span><span id="last-sync">尚未同步</span></div>
+        <div class="topbar-actions">
+          <span class="live-indicator"><i></i>LIVE</span>
+          <button id="refresh-button" class="icon-button" title="刷新数据" aria-label="刷新数据">↻</button>
+          <button id="mobile-logout-button" class="icon-button mobile-only" title="退出登录" aria-label="退出登录">↩</button>
+        </div>
+      </header>
+
+      <div id="global-status" class="global-status" role="status"></div>
+
+      <section id="view-overview" class="view active" data-view="overview">
+        <div class="view-heading reveal-one">
+          <div><p class="eyebrow">PRIVATE NODE / OVERVIEW</p><h2>服务器现在很安静。</h2><p class="heading-note">审批新成员，看看设备状态，其余交给加密层。</p></div>
+          <div class="heading-date"><span id="today-label">TODAY</span><strong id="today-date">--</strong></div>
+        </div>
+
+        <article class="hero-card reveal-two">
+          <div class="hero-main">
+            <div class="hero-kicker"><span class="hero-pulse"></span><span>PRIVATE RELAY / ONLINE</span></div>
+            <h1 id="server-name">LanChat Server</h1>
+            <p id="security-copy">端到端加密已启用。控制室只观察连接、设备和容量，不读取聊天内容。</p>
+            <div class="hero-details"><span><b class="detail-key">ADDRESS</b><span id="server-address">本地服务器</span></span><span><b class="detail-key">RETENTION</b><span id="hero-retention">30 天</span></span><span><b class="detail-key">MEDIA</b><span id="hero-media-limit">20 MB / 图片</span></span></div>
+          </div>
+          <div class="hero-emblem" aria-hidden="true"><span>LC</span><i></i></div>
+        </article>
+
+        <div class="metric-grid reveal-three">
+          <article class="metric-card metric-warm"><div class="metric-label"><span class="metric-dot dot-orange"></span>待处理申请</div><strong id="metric-pending">0</strong><small>需要你的决定</small></article>
+          <article class="metric-card metric-green"><div class="metric-label"><span class="metric-dot dot-jade"></span>在线设备</div><strong id="metric-online">0</strong><small>最近 5 分钟活跃</small></article>
+          <article class="metric-card"><div class="metric-label"><span class="metric-dot dot-ink"></span>服务器成员</div><strong id="metric-users">0</strong><small>已批准的账号</small></article>
+          <article class="metric-card metric-outline"><div class="metric-label"><span class="metric-dot dot-gold"></span>今日图片流量</div><strong id="metric-traffic">0 B</strong><small id="metric-day">UTC today</small></article>
+        </div>
+
+        <div class="dashboard-grid reveal-four">
+          <article class="panel approval-panel">
+            <div class="panel-heading"><div><p class="eyebrow">REVIEW QUEUE</p><h3>等你决定的事</h3></div><span id="queue-count" class="panel-count">0</span></div>
+            <div id="approval-list" class="approval-list"><div class="loading-line"></div><div class="loading-line short"></div></div>
+            <div id="device-approval-list" class="device-queue"></div>
+          </article>
+
+          <article class="panel invite-panel">
+            <div class="panel-heading"><div><p class="eyebrow">PRIVATE ENTRY</p><h3>发一张邀请</h3></div><span class="panel-mark">+</span></div>
+            <p class="panel-intro">邀请码只证明对方认识你。成员仍然需要经过你的审批。</p>
+            <form id="invite-form" class="invite-form">
+              <label class="toggle-row"><span><strong>单人邀请码</strong><small>使用一次后失效</small></span><input id="invite-single-use" type="checkbox" checked><i class="toggle-ui"></i></label>
+              <label>有效期<select id="invite-lifetime"><option value="7">7 天</option><option value="30">30 天</option><option value="90">90 天</option><option value="0">不过期</option></select></label>
+              <button class="button button-dark button-wide" type="submit"><span>生成邀请码</span><b>＋</b></button>
+            </form>
+            <div id="last-code" class="code-reveal hidden"><span class="eyebrow">NEW INVITATION / COPY NOW</span><div><code id="last-code-value"></code><button data-action="copy-code" class="copy-button" title="复制邀请码">复制</button></div><small>邀请码只显示在这里，不会再次从服务器取回。</small></div>
+          </article>
+        </div>
+
+        <article class="privacy-note reveal-four"><span class="note-icon">✦</span><div><strong>加密边界</strong><p>服务器可以知道谁连接、哪些设备在线以及占用了多少容量，但聊天正文和图片内容在客户端加密后才会离开设备。</p></div><span class="note-tag">E2EE</span></article>
+      </section>
+
+      <section id="view-people" class="view" data-view="people">
+        <div class="view-heading"><div><p class="eyebrow">PEOPLE / DEVICES</p><h2>成员和设备</h2><p class="heading-note">每台新设备都需要单独获得许可。</p></div><button id="people-refresh" class="button button-quiet">刷新成员 <b>↻</b></button></div>
+        <div class="people-toolbar"><div class="search-box"><span>⌕</span><input id="people-search" type="search" placeholder="按用户名或昵称搜索"></div><span id="people-count" class="toolbar-count">0 位成员</span></div>
+        <div id="people-list" class="people-list"><div class="empty-state"><span class="empty-orbit"></span><strong>成员列表还在路上</strong><small>登录后会在这里显示。</small></div></div>
+      </section>
+
+      <section id="view-settings" class="view" data-view="settings">
+        <div class="view-heading"><div><p class="eyebrow">NODE / SETTINGS</p><h2>让服务器按你的方式运行</h2><p class="heading-note">只调整容量和访问控制，不碰聊天正文。</p></div></div>
+        <div class="settings-grid">
+          <article class="panel settings-card settings-wide"><div class="panel-heading"><div><p class="eyebrow">RETENTION & LIMITS</p><h3>容量与保留</h3></div><span class="panel-mark">◌</span></div><p class="panel-intro">这些限制只影响服务器缓存。大文件仍然留在局域网直连路径中。</p><form id="config-form" class="settings-form"><div class="field-grid"><label>消息保留天数<input id="retention-days" type="number" min="1" max="365" required><small>1 至 365 天</small></label><label>单张图片上限（MB）<input id="max-image-mb" type="number" min="1" max="20" required><small>最多 20 MB</small></label></div><details><summary>高级流量限制</summary><div class="field-grid"><label>单用户每日图片流量（GB）<input id="user-quota-gb" type="number" min="1" step="0.5" required></label><label>全局每日图片流量（GB）<input id="global-quota-gb" type="number" min="1" step="0.5" required></label></div></details><div class="locked-setting"><span class="lock-glyph">◇</span><div><strong>端到端加密</strong><small>当前服务器策略固定为客户端加密，控制室不会切换为可读模式。</small></div><span class="locked-label">LOCKED</span></div><button class="button button-primary" type="submit">保存容量设置 <b>↗</b></button></form></article>
+          <article class="panel settings-card"><div class="panel-heading"><div><p class="eyebrow">GROUP ACCESS</p><h3>群组邀请码</h3></div><span class="panel-mark">⌁</span></div><p class="panel-intro">轮换后，旧的群组邀请码立即失效。新邀请码只显示一次。</p><button id="rotate-group-invite" class="button button-dark button-wide" type="button">轮换群组邀请码 <b>↻</b></button><div id="last-group-code" class="code-reveal hidden"><span class="eyebrow">NEW GROUP CODE</span><div><code id="last-group-code-value"></code><button data-action="copy-group-code" class="copy-button">复制</button></div></div></article>
+          <article class="panel settings-card"><div class="panel-heading"><div><p class="eyebrow">ADMIN CREDENTIALS</p><h3>管理员密码</h3></div><span class="panel-mark">⌑</span></div><p class="panel-intro">定期更换控制室密码。更换后当前浏览器会话仍然有效。</p><form id="admin-password-form" class="settings-form"><label>新的管理员密码<input id="new-admin-password" type="password" minlength="8" autocomplete="new-password" required></label><label>再次输入密码<input id="new-admin-password-confirm" type="password" minlength="8" autocomplete="new-password" required></label><button class="button button-quiet button-wide" type="submit">更新密码 <b>↗</b></button></form></article>
+        </div>
+      </section>
+
+      <footer class="workspace-footer"><span>LanChat / quiet by design</span><span id="footer-server-name">Private server</span></footer>
+    </main>
   </div>
-</main>
-<script>
-  let adminToken = '';
-  const $ = (id) => document.getElementById(id);
-  const setStatus = (text, error = true) => { $('status').textContent = text; $('status').style.color = error ? '#8c3e2d' : '#226b4b'; };
-  async function api(path, options = {}) {
-    options.headers = { ...(options.headers || {}), 'content-type': 'application/json' };
-    if (adminToken) options.headers.authorization = `Bearer ${adminToken}`;
-    const response = await fetch(path, options);
-    const text = await response.text();
-    const body = text ? JSON.parse(text) : {};
-    if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-    return body;
-  }
-  async function refresh() {
-    const config = await api('/api/v1/admin/config');
-    const stats = await api('/api/v1/admin/stats');
-    const users = await api('/api/v1/admin/users');
-    $('server-name').textContent = config.serverName;
-    $('encryption-mode').value = config.encryptionMode;
-    $('image-bytes').textContent = String(stats.imageBytes || 0);
-    $('device-count').textContent = String((users.users || []).length);
-    $('max-image').value = config.maxImageBytes;
-    $('retention').value = config.retentionDays;
-    $('user-quota').value = config.perUserDailyImageBytes;
-    $('global-quota').value = config.globalDailyImageBytes;
-    $('users').textContent = JSON.stringify(users.users || [], null, 2);
-  }
-  $('login-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    try {
-      const result = await api('/api/v1/admin/login', { method: 'POST', body: JSON.stringify({ password: $('password').value }) });
-      adminToken = result.token;
-      $('login').style.display = 'none';
-      $('app').style.display = 'block';
-      await refresh();
-      setStatus('登录成功', false);
-    } catch (error) { setStatus(error.message); }
-  });
-  $('config-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    try {
-      await api('/api/v1/admin/config', { method: 'PUT', body: JSON.stringify({
-        encryptionMode: $('encryption-mode').value,
-        maxImageBytes: Number($('max-image').value), retentionDays: Number($('retention').value),
-        perUserDailyImageBytes: Number($('user-quota').value), globalDailyImageBytes: Number($('global-quota').value)
-      }) });
-      setStatus('限制已保存', false);
-    } catch (error) { setStatus(error.message); }
-  });
-  $('user-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    try {
-      await api('/api/v1/admin/users', { method: 'POST', body: JSON.stringify({
-        username: $('username').value, displayName: $('display-name').value, password: $('user-password').value
-      }) });
-      event.target.reset(); await refresh(); setStatus('用户已创建', false);
-    } catch (error) { setStatus(error.message); }
-  });
-  $('reset-user-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    try {
-      const userId = encodeURIComponent($('reset-user-id').value);
-      await api(`/api/v1/admin/users/${userId}/password`, { method: 'POST', body: JSON.stringify({ password: $('reset-user-password').value }) });
-      event.target.reset(); setStatus('用户密码已重置', false);
-    } catch (error) { setStatus(error.message); }
-  });
-  $('revoke-device-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    try {
-      const userId = encodeURIComponent($('revoke-user-id').value);
-      const deviceId = encodeURIComponent($('revoke-device-id').value);
-      await api(`/api/v1/admin/users/${userId}/devices/${deviceId}`, { method: 'DELETE' });
-      event.target.reset(); setStatus('设备已撤销', false);
-    } catch (error) { setStatus(error.message); }
-  });
-  $('admin-password-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    try {
-      await api('/api/v1/admin/password', { method: 'POST', body: JSON.stringify({ password: $('admin-password').value }) });
-      event.target.reset(); setStatus('管理员密码已修改', false);
-    } catch (error) { setStatus(error.message); }
-  });
-  $('access-code-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    try {
-      await api('/api/v1/admin/access-code/rotate', { method: 'POST', body: JSON.stringify({ accessCode: $('access-code').value }) });
-      event.target.reset(); setStatus('服务器接入码已轮换', false);
-    } catch (error) { setStatus(error.message); }
-  });
-  $('logout').addEventListener('click', () => { adminToken = ''; location.reload(); });
-</script>
+
+  <dialog id="device-dialog" class="device-dialog"><div class="dialog-heading"><div><p class="eyebrow">DEVICE DETAIL</p><h3 id="dialog-user-name">设备</h3></div><button class="icon-button" data-action="close-dialog" aria-label="关闭">×</button></div><div id="dialog-devices" class="dialog-devices"></div></dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/app.js" defer></script>
 </body>
 </html>

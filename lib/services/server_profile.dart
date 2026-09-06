@@ -5,6 +5,7 @@ class ServerProfile {
     required String baseUrl,
     required this.username,
     this.enabled = true,
+    this.pendingRequestId,
   }) : baseUrl = normalizeBaseUrl(baseUrl) {
     if (!RegExp(r'^[A-Za-z0-9._-]{1,64}$').hasMatch(id)) {
       throw ArgumentError.value(id, 'id');
@@ -15,6 +16,10 @@ class ServerProfile {
     if (username.trim().isEmpty || username.length > 128) {
       throw ArgumentError.value(username, 'username');
     }
+    if (pendingRequestId != null &&
+        (pendingRequestId!.trim().isEmpty || pendingRequestId!.length > 128)) {
+      throw ArgumentError.value(pendingRequestId, 'pendingRequestId');
+    }
   }
 
   final String id;
@@ -22,13 +27,16 @@ class ServerProfile {
   final String baseUrl;
   final String username;
   final bool enabled;
+  final String? pendingRequestId;
 
   Uri get uri => Uri.parse(baseUrl);
+
+  bool get isSecure => uri.scheme == 'https';
 
   static String normalizeBaseUrl(String raw) {
     final uri = Uri.tryParse(raw.trim());
     if (uri == null ||
-        uri.scheme != 'https' ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
         uri.host.isEmpty ||
         uri.userInfo.isNotEmpty ||
         uri.query.isNotEmpty ||
@@ -43,12 +51,13 @@ class ServerProfile {
   }
 
   Map<String, dynamic> toMap() => {
-        'id': id,
-        'name': name,
-        'baseUrl': baseUrl,
-        'username': username,
-        'enabled': enabled,
-      };
+    'id': id,
+    'name': name,
+    'baseUrl': baseUrl,
+    'username': username,
+    'enabled': enabled,
+    if (pendingRequestId != null) 'pendingRequestId': pendingRequestId,
+  };
 
   static ServerProfile fromMap(Object? value) {
     if (value is! Map ||
@@ -64,8 +73,19 @@ class ServerProfile {
       baseUrl: value['baseUrl'] as String,
       username: value['username'] as String,
       enabled: value['enabled'] != false,
+      pendingRequestId: value['pendingRequestId'] is String
+          ? value['pendingRequestId'] as String
+          : null,
     );
   }
+
+  ServerProfile withoutPendingRequest() => ServerProfile(
+    id: id,
+    name: name,
+    baseUrl: baseUrl,
+    username: username,
+    enabled: enabled,
+  );
 
   @override
   bool operator ==(Object other) =>
@@ -74,8 +94,10 @@ class ServerProfile {
       other.name == name &&
       other.baseUrl == baseUrl &&
       other.username == username &&
-      other.enabled == enabled;
+      other.enabled == enabled &&
+      other.pendingRequestId == pendingRequestId;
 
   @override
-  int get hashCode => Object.hash(id, name, baseUrl, username, enabled);
+  int get hashCode =>
+      Object.hash(id, name, baseUrl, username, enabled, pendingRequestId);
 }
