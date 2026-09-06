@@ -45,6 +45,7 @@ Future<void> main() async {
   final server = ControlServer(
     store: store,
     serverName: serverName,
+    matrixServerName: matrixServerName,
     matrixGateway: matrixGateway,
     matrixProxyUrl: synapseUrl == null ? null : Uri.parse(synapseUrl),
     synapseConfigFile: synapseConfigPath == null
