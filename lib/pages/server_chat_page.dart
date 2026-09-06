@@ -278,11 +278,16 @@ class _ServerChatPageState extends State<ServerChatPage> {
               : message.isFile
               ? _remoteFile(message)
               : Column(
+                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Align(
                       alignment: Alignment.centerLeft,
-                      child: SelectableText(message.body),
+                      widthFactor: 1,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 300),
+                        child: SelectableText(message.body),
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(

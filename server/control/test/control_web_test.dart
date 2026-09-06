@@ -39,6 +39,7 @@ void main() {
       contains('docker compose --env-file .env restart synapse'),
     );
     expect(htmlBody, contains('reset-password-form'));
+    expect(htmlBody, contains('blacklist-list'));
     expect(css.statusCode, 200);
     expect(await css.readAsString(), contains('--jade'));
     expect(js.statusCode, 200);
@@ -46,6 +47,7 @@ void main() {
     expect(jsBody, contains('/api/v1/admin/requests'));
     expect(jsBody, contains('maxFileBytes'));
     expect(jsBody, contains('/api/v1/admin/invitations'));
+    expect(jsBody, contains('data-action="kick-user"'));
     await directory.delete(recursive: true);
   });
 }

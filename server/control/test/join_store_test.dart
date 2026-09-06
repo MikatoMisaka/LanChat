@@ -179,6 +179,67 @@ void main() {
     await directory.delete(recursive: true);
   });
 
+  test('removing a device hides it and requires approval again', () async {
+    final directory = await Directory.systemTemp.createTemp('lanchat-join');
+    final config = ConfigStore(File('${directory.path}/config.json'));
+    await config.initialize(
+      adminPassword: 'admin-password',
+      accessCode: 'group-invite',
+    );
+    final store = JoinStore(
+      File('${directory.path}/joins.json'),
+      config: config,
+    );
+
+    final request = await store.submit(
+      inviteCode: 'group-invite',
+      username: 'alice',
+      password: 'user-password',
+      displayName: 'Alice',
+      deviceId: 'PHONE',
+    );
+    await store.approve(request.id);
+    await store.removeDevice(userId: 'alice', deviceId: 'PHONE');
+
+    expect(await store.devicesForUser('alice'), isEmpty);
+    expect(
+      (await store.authenticate(
+        username: 'alice',
+        password: 'user-password',
+        deviceId: 'PHONE',
+      )).status,
+      UserLoginStatus.devicePending,
+    );
+    await directory.delete(recursive: true);
+  });
+
+  test('removing a user clears its members and devices', () async {
+    final directory = await Directory.systemTemp.createTemp('lanchat-join');
+    final config = ConfigStore(File('${directory.path}/config.json'));
+    await config.initialize(
+      adminPassword: 'admin-password',
+      accessCode: 'group-invite',
+    );
+    final store = JoinStore(
+      File('${directory.path}/joins.json'),
+      config: config,
+    );
+
+    final request = await store.submit(
+      inviteCode: 'group-invite',
+      username: 'alice',
+      password: 'user-password',
+      displayName: 'Alice',
+      deviceId: 'PHONE',
+    );
+    await store.approve(request.id);
+    await store.removeUser('alice');
+
+    expect(await store.findUser('alice'), isNull);
+    expect(await store.devicesForUser('alice'), isEmpty);
+    await directory.delete(recursive: true);
+  });
+
   test('lists and revokes generated invitations', () async {
     final directory = await Directory.systemTemp.createTemp('lanchat-join');
     final config = ConfigStore(File('${directory.path}/config.json'));

@@ -610,11 +610,48 @@ class JoinStore {
 
   Future<List<ServerDevice>> devicesForUser(String userId) async =>
       (await _load()).devices
-          .where((device) => device.userId == userId)
+          .where(
+            (device) =>
+                device.userId == userId &&
+                device.status != DeviceStatus.revoked,
+          )
           .toList(growable: false);
 
-  Future<List<ServerDevice>> allDevices() async =>
-      (await _load()).devices.toList(growable: false);
+  Future<List<ServerDevice>> allDevices() async => (await _load()).devices
+      .where((device) => device.status != DeviceStatus.revoked)
+      .toList(growable: false);
+
+  Future<void> removeDevice({
+    required String userId,
+    required String deviceId,
+  }) async {
+    final data = await _load();
+    final before = data.devices.length;
+    data.devices.removeWhere(
+      (device) => device.userId == userId && device.deviceId == deviceId,
+    );
+    if (data.devices.length == before) {
+      throw JoinStoreException('Device was not found.');
+    }
+    await _save(data);
+  }
+
+  Future<void> removeUser(String username) async {
+    final data = await _load();
+    final normalized = username.trim().toLowerCase();
+    final before = data.users.length;
+    data.users.removeWhere((user) => user.username == normalized);
+    if (data.users.length == before) {
+      throw JoinStoreException('User was not found.');
+    }
+    data.devices.removeWhere((device) => device.userId == normalized);
+    data.requests.removeWhere(
+      (request) =>
+          request.username == normalized &&
+          request.status == JoinRequestStatus.pending,
+    );
+    await _save(data);
+  }
 
   Future<List<ServerInvitation>> invitations() async => (await _load())
       .invitations

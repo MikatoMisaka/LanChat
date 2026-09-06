@@ -164,6 +164,11 @@
         <div class="view-heading"><div><p class="eyebrow">PEOPLE / DEVICES</p><h2>成员和设备</h2><p class="heading-note">每台新设备都需要单独获得许可。</p></div><button id="people-refresh" class="button button-quiet">刷新成员 <b>↻</b></button></div>
         <div class="people-toolbar"><div class="search-box"><span>⌕</span><input id="people-search" type="search" placeholder="按用户名或昵称搜索"></div><span id="people-count" class="toolbar-count">0 位成员</span></div>
         <div id="people-list" class="people-list"><div class="empty-state"><span class="empty-orbit"></span><strong>成员列表还在路上</strong><small>登录后会在这里显示。</small></div></div>
+        <article class="panel blacklist-panel">
+          <div class="panel-heading"><div><p class="eyebrow">ACCESS CONTROL</p><h3>黑名单</h3></div><span id="blacklist-count" class="panel-count">0</span></div>
+          <p class="panel-intro">黑名单用户不能登录或重新加入服务器。移出黑名单后才可以恢复访问。</p>
+          <div id="blacklist-list" class="people-list"><div class="empty-state"><strong>黑名单为空</strong></div></div>
+        </article>
       </section>
 
       <section id="view-settings" class="view" data-view="settings">

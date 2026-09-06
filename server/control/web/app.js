@@ -215,17 +215,23 @@
 
   function renderPeople() {
     const query = ($('people-search').value || '').trim().toLowerCase();
-    const people = state.users.filter((user) => !query || `${user.username} ${user.displayName}`.toLowerCase().includes(query));
+    const activeUsers = state.users.filter((user) => !user.disabled);
+    const blacklistedUsers = state.users.filter((user) => user.disabled);
+    const people = activeUsers.filter((user) => !query || `${user.username} ${user.displayName}`.toLowerCase().includes(query));
     $('people-count').textContent = `${people.length} 位成员`;
     if (!people.length) {
       $('people-list').innerHTML = '<div class="empty-state"><span class="empty-orbit"></span><strong>没有匹配的成员</strong><small>换一个用户名或昵称试试。</small></div>';
-      return;
+    } else {
+      $('people-list').innerHTML = people.map((user) => {
+        const devices = user.devices || [];
+        const chips = devices.map((device) => `<span class="device-chip ${escapeHtml(device.status)}">${device.online ? '● ' : ''}${escapeHtml(device.deviceId)}</span>`).join('');
+        return `<article class="person-card"><div class="person-card-head"><div class="person-line"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><div><h3 class="person-card-name">${escapeHtml(user.displayName)}</h3><p class="person-card-handle">@${escapeHtml(user.username)}</p></div></div><span class="presence ${user.online ? 'online' : ''}"><i></i>${user.online ? 'ONLINE' : 'OFFLINE'}</span></div><div>${chips || '<span class="device-chip">暂无设备</span>'}</div><div class="device-summary"><span>加入于 ${escapeHtml(formatDate(user.createdAt))}</span><strong>${devices.length} 台设备</strong></div><div class="user-actions"><button class="mini-button" data-action="show-devices" data-user="${escapeHtml(user.username)}">查看设备</button><button class="mini-button" data-action="reset-password" data-user="${escapeHtml(user.username)}">重置密码</button><button class="mini-button danger" data-action="kick-user" data-user="${escapeHtml(user.username)}">踢出服务器</button><button class="mini-button danger" data-action="disable-user" data-user="${escapeHtml(user.username)}" data-disabled="false">加入黑名单</button></div></article>`;
+      }).join('');
     }
-    $('people-list').innerHTML = people.map((user) => {
-      const devices = user.devices || [];
-      const chips = devices.map((device) => `<span class="device-chip ${escapeHtml(device.status)}">${device.online ? '● ' : ''}${escapeHtml(device.deviceId)}</span>`).join('');
-      return `<article class="person-card"><div class="person-card-head"><div class="person-line"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><div><h3 class="person-card-name">${escapeHtml(user.displayName)}</h3><p class="person-card-handle">@${escapeHtml(user.username)}</p></div></div><span class="presence ${user.online ? 'online' : ''}"><i></i>${user.online ? 'ONLINE' : 'OFFLINE'}</span></div><div>${chips || '<span class="device-chip">暂无设备</span>'}</div><div class="device-summary"><span>加入于 ${escapeHtml(formatDate(user.createdAt))}</span><strong>${devices.length} 台设备</strong></div><div class="user-actions"><button class="mini-button" data-action="show-devices" data-user="${escapeHtml(user.username)}">查看设备</button><button class="mini-button" data-action="reset-password" data-user="${escapeHtml(user.username)}">重置密码</button><button class="mini-button danger" data-action="disable-user" data-user="${escapeHtml(user.username)}" data-disabled="${user.disabled ? 'true' : 'false'}">${user.disabled ? '恢复用户' : '禁用用户'}</button></div></article>`;
-    }).join('');
+    $('blacklist-count').textContent = `${blacklistedUsers.length}`;
+    $('blacklist-list').innerHTML = blacklistedUsers.length
+      ? blacklistedUsers.map((user) => `<article class="person-card"><div class="person-card-head"><div class="person-line"><span class="avatar">${escapeHtml(initials(user.displayName))}</span><div><h3 class="person-card-name">${escapeHtml(user.displayName)}</h3><p class="person-card-handle">@${escapeHtml(user.username)}</p></div></div><span class="device-chip revoked">永久禁用</span></div><div class="device-summary"><span>加入于 ${escapeHtml(formatDate(user.createdAt))}</span><strong>${(user.devices || []).length} 台历史设备</strong></div><div class="user-actions"><button class="mini-button confirm" data-action="disable-user" data-user="${escapeHtml(user.username)}" data-disabled="true">移出黑名单</button><button class="mini-button" data-action="show-devices" data-user="${escapeHtml(user.username)}">查看设备</button></div></article>`).join('')
+      : '<div class="empty-state"><strong>黑名单为空</strong><small>被永久禁用的用户会显示在这里。</small></div>';
   }
 
   function populateConfig() {
@@ -322,8 +328,9 @@
     try {
       const path = `/api/v1/admin/users/${encodedUser}/devices/${encodedDevice}`;
       await api(approved ? `${path}/approve` : path, { method: approved ? 'POST' : 'DELETE' });
-      showToast(approved ? '设备已批准。' : '设备已拒绝。');
+      showToast(approved ? '设备已批准。' : '设备已踢出。');
       await refresh();
+      if ($('device-dialog').open) await showDevices(user, false);
     } catch (error) { showToast(error.message, true); }
   }
 
@@ -337,8 +344,8 @@
   }
 
   async function toggleUser(user, disabled) {
-    const action = disabled ? '恢复' : '禁用';
-    if (!window.confirm(`${action} ${user}？${disabled ? '' : '该用户的现有会话会立即失效。'}`)) return;
+    const action = disabled ? '移出黑名单' : '加入黑名单';
+    if (!window.confirm(`${action} ${user}？${disabled ? '该用户将恢复登录。' : '该用户将永久禁止登录，现有会话会立即失效。'}`)) return;
     try {
       await api(`/api/v1/admin/users/${encodeURIComponent(user)}/disable`, { method: 'POST', body: JSON.stringify({ disabled: !disabled }) });
       showToast(`用户已${action}。`);
@@ -346,12 +353,21 @@
     } catch (error) { showToast(error.message, true); }
   }
 
-  async function showDevices(username) {
+  async function kickUser(username) {
+    if (!window.confirm(`踢出 ${username}？该用户会从成员和设备列表移除，但之后仍可凭新邀请码重新申请。`)) return;
+    try {
+      await api(`/api/v1/admin/users/${encodeURIComponent(username)}/kick`, { method: 'POST' });
+      showToast('用户已踢出服务器。');
+      await refresh();
+    } catch (error) { showToast(error.message, true); }
+  }
+
+  async function showDevices(username, open = true) {
     try {
       const result = await api(`/api/v1/admin/users/${encodeURIComponent(username)}/devices`);
       $('dialog-user-name').textContent = `@${username}`;
-      $('dialog-devices').innerHTML = (result.devices || []).map((device) => `<div class="dialog-device"><div><strong>${escapeHtml(device.deviceId)}</strong><small>${escapeHtml(device.status)} · ${device.online ? '最近在线' : '未在线'}</small></div><button class="mini-button danger" data-action="revoke-device" data-user="${escapeHtml(username)}" data-device="${escapeHtml(device.deviceId)}">撤销</button></div>`).join('') || '<div class="empty-state"><strong>还没有设备</strong></div>';
-      $('device-dialog').showModal();
+      $('dialog-devices').innerHTML = (result.devices || []).map((device) => `<div class="dialog-device"><div><strong>${escapeHtml(device.deviceId)}</strong><small>${escapeHtml(device.status)} · ${device.online ? '最近在线' : '未在线'}</small></div><button class="mini-button danger" data-action="revoke-device" data-user="${escapeHtml(username)}" data-device="${escapeHtml(device.deviceId)}">踢出设备</button></div>`).join('') || '<div class="empty-state"><strong>没有活跃设备</strong></div>';
+      if (open && !$('device-dialog').open) $('device-dialog').showModal();
     } catch (error) { showToast(error.message, true); }
   }
 
@@ -403,6 +419,7 @@
     if (action === 'revoke-device') reviewDevice(actionButton.dataset.user, actionButton.dataset.device, false);
     if (action === 'revoke-invitation') revokeInvitation(actionButton.dataset.id);
     if (action === 'disable-user') toggleUser(actionButton.dataset.user, actionButton.dataset.disabled === 'true');
+    if (action === 'kick-user') kickUser(actionButton.dataset.user);
     if (action === 'show-devices') showDevices(actionButton.dataset.user);
     if (action === 'reset-password') showResetPassword(actionButton.dataset.user);
     if (action === 'copy-code') copyText($('last-code-value').textContent);

@@ -151,6 +151,7 @@ class ControlServer {
       ..get('/api/v1/admin/users', _listUsers)
       ..post('/api/v1/admin/users/<userId>/password', _resetUserPassword)
       ..post('/api/v1/admin/users/<userId>/disable', _disableUser)
+      ..post('/api/v1/admin/users/<userId>/kick', _kickUser)
       ..get('/api/v1/admin/users/<userId>/devices', _listUserDevices)
       ..post(
         '/api/v1/admin/users/<userId>/devices/<deviceId>/approve',
@@ -700,13 +701,15 @@ class ControlServer {
     final denied = await _requireAdmin(request);
     if (denied != null) return denied;
     final users = await joinStore.users();
+    final activeUsers = users.where((user) => !user.disabled).length;
     final requests = await joinStore.pendingRequests();
     final devices = await joinStore.allDevices();
     final sessions = await sessionStore.activeSessions();
     final cutoff = DateTime.now().toUtc().subtract(const Duration(minutes: 5));
     return _json({
       ...store.stats(),
-      'userCount': users.length,
+      'userCount': activeUsers,
+      'blacklistedUserCount': users.length - activeUsers,
       'deviceCount': devices.length,
       'onlineDevices': sessions
           .where((session) => session.lastSeenAt.isAfter(cutoff))
@@ -775,6 +778,30 @@ class ControlServer {
     }
   }
 
+  Future<Response> _kickUser(Request request, String userId) async {
+    final denied = await _requireAdmin(request);
+    if (denied != null) return denied;
+    final decodedUserId = Uri.decodeComponent(userId);
+    try {
+      final user = await joinStore.findUser(decodedUserId);
+      if (user == null) return _json({'error': 'user_not_found'}, status: 404);
+      final gateway = matrixGateway;
+      if (gateway != null) {
+        await gateway.setUserDisabled(
+          username: decodedUserId,
+          disabled: true,
+          matrixPassword: await store.matrixPasswordFor(user.passwordHash),
+          displayName: user.displayName,
+        );
+      }
+      await joinStore.removeUser(decodedUserId);
+      await sessionStore.revokeUser(decodedUserId);
+      return _json({'ok': true});
+    } on JoinStoreException catch (error) {
+      return _json({'error': error.message}, status: 400);
+    }
+  }
+
   Future<Response> _createInvitation(Request request) async {
     final denied = await _requireAdmin(request);
     if (denied != null) return denied;
@@ -803,6 +830,13 @@ class ControlServer {
       });
     } on JoinStoreException catch (error) {
       return _json({'error': error.message}, status: 400);
+    } on MatrixGatewayException catch (error) {
+      return _json({'error': error.message}, status: 502);
+    } catch (error) {
+      return _json({
+        'error': 'chat_backend_unavailable',
+        'detail': '$error',
+      }, status: 502);
     }
   }
 
@@ -828,6 +862,13 @@ class ControlServer {
       return _json({'ok': true});
     } on JoinStoreException catch (error) {
       return _json({'error': error.message}, status: 400);
+    } on MatrixGatewayException catch (error) {
+      return _json({'error': error.message}, status: 502);
+    } catch (error) {
+      return _json({
+        'error': 'chat_backend_unavailable',
+        'detail': '$error',
+      }, status: 502);
     }
   }
 
@@ -890,6 +931,13 @@ class ControlServer {
       return _json({'ok': true});
     } on JoinStoreException catch (error) {
       return _json({'error': error.message}, status: 400);
+    } on MatrixGatewayException catch (error) {
+      return _json({'error': error.message}, status: 502);
+    } catch (error) {
+      return _json({
+        'error': 'chat_backend_unavailable',
+        'detail': '$error',
+      }, status: 502);
     }
   }
 
@@ -918,6 +966,13 @@ class ControlServer {
       return _json({'ok': true, 'disabled': disabled});
     } on JoinStoreException catch (error) {
       return _json({'error': error.message}, status: 400);
+    } on MatrixGatewayException catch (error) {
+      return _json({'error': error.message}, status: 502);
+    } catch (error) {
+      return _json({
+        'error': 'chat_backend_unavailable',
+        'detail': '$error',
+      }, status: 502);
     }
   }
 
@@ -986,7 +1041,7 @@ class ControlServer {
           localDevice.matrixDeviceId!,
         );
       }
-      await joinStore.revokeDevice(
+      await joinStore.removeDevice(
         userId: decodedUserId,
         deviceId: decodedDeviceId,
       );
@@ -997,6 +1052,13 @@ class ControlServer {
       return _json({'ok': true});
     } on JoinStoreException catch (error) {
       return _json({'error': error.message}, status: 400);
+    } on MatrixGatewayException catch (error) {
+      return _json({'error': error.message}, status: 502);
+    } catch (error) {
+      return _json({
+        'error': 'chat_backend_unavailable',
+        'detail': '$error',
+      }, status: 502);
     }
   }
 
@@ -1161,7 +1223,9 @@ class SynapseAdminClient implements MatrixGateway {
       }),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('Synapse create user: ${response.statusCode}');
+      throw MatrixGatewayException(
+        'Synapse create user failed: ${response.statusCode}',
+      );
     }
   }
 
@@ -1202,7 +1266,9 @@ class SynapseAdminClient implements MatrixGateway {
       body: jsonEncode({'password': password}),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('Synapse reset password: ${response.statusCode}');
+      throw MatrixGatewayException(
+        'Synapse reset password failed: ${response.statusCode}',
+      );
     }
   }
 
@@ -1239,7 +1305,9 @@ class SynapseAdminClient implements MatrixGateway {
       headers: _headers,
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('Synapse revoke device: ${response.statusCode}');
+      throw MatrixGatewayException(
+        'Synapse revoke device failed: ${response.statusCode}',
+      );
     }
   }
 
@@ -1252,7 +1320,9 @@ class SynapseAdminClient implements MatrixGateway {
       body: jsonEncode({'erase': false}),
     );
     if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception('Synapse deactivate user: ${response.statusCode}');
+      throw MatrixGatewayException(
+        'Synapse deactivate user failed: ${response.statusCode}',
+      );
     }
   }
 
