@@ -516,6 +516,10 @@ class ControlServer {
     if (context == null) return _json({'error': 'login_required'}, status: 401);
     if (matrixServerName == null ||
         !isValidMatrixServerName(matrixServerName!)) {
+      stderr.writeln(
+        'Directory disabled: invalid SYNAPSE_SERVER_NAME '
+        '"${matrixServerName ?? '<missing>'}"',
+      );
       return _json({'error': 'matrix_server_name_invalid'}, status: 503);
     }
     final query = (request.url.queryParameters['q'] ?? '').trim().toLowerCase();

@@ -9,6 +9,7 @@ import 'package:test/test.dart';
 void main() {
   test('validates Matrix server names separately from display names', () {
     expect(isValidMatrixServerName('chat.example.com'), isTrue);
+    expect(isValidMatrixServerName('chat.misaka-misaka.xyz'), isTrue);
     expect(isValidMatrixServerName('chat.example.com:8448'), isTrue);
     expect(isValidMatrixServerName('LanChat Server'), isFalse);
     expect(isValidMatrixServerName('https://chat.example.com'), isFalse);
