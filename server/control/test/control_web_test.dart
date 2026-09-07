@@ -41,7 +41,9 @@ void main() {
     expect(htmlBody, contains('reset-password-form'));
     expect(htmlBody, contains('blacklist-list'));
     expect(css.statusCode, 200);
-    expect(await css.readAsString(), contains('--jade'));
+    final cssBody = await css.readAsString();
+    expect(cssBody, contains('--jade'));
+    expect(cssBody, contains('.blacklist-panel'));
     expect(js.statusCode, 200);
     final jsBody = await js.readAsString();
     expect(jsBody, contains('/api/v1/admin/requests'));

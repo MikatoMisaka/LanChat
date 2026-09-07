@@ -237,6 +237,10 @@ label input:focus, label select:focus, .search-box input:focus { border-color: v
 .search-box input { min-height: 41px; border-radius: 0; background: transparent; }
 .toolbar-count { color: #90a095; font-size: 11px; font-weight: 800; }
 .people-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+.blacklist-panel { margin-top: 24px; padding: 26px; }
+.blacklist-panel .people-list { margin-top: 18px; }
+.blacklist-panel .user-actions { flex-wrap: wrap; justify-content: flex-end; }
+.blacklist-panel .user-actions .mini-button { flex: 0 1 auto; }
 .person-card { padding: 20px; border: 1px solid var(--line); background: rgba(255, 253, 248, .82); box-shadow: var(--shadow-small); }
 .person-card-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
 .person-card .avatar { width: 45px; height: 45px; font-size: 22px; }
@@ -358,6 +362,7 @@ label input:focus, label select:focus, .search-box input:focus { border-color: v
   .metric-card { min-height: 118px; padding: 14px; }
   .metric-card strong { margin-top: 13px; font-size: 28px; }
   .approval-panel, .invite-panel, .settings-card { padding: 20px 17px; }
+  .blacklist-panel { padding: 20px 17px; }
   .panel-heading h3 { font-size: 24px; }
   .approval-row, .device-row { grid-template-columns: 1fr; gap: 10px; }
   .row-actions { justify-content: end; }
